@@ -1,0 +1,150 @@
+// examples/demo/app.matrix
+// AppStudio showcase app — multi-file pages, forms, dialogs, storage, theme, and host effects.
+//
+// Run natively:  spid3r run studio.matrix run examples/demo
+// Hot reload:    spid3r run studio.matrix dev examples/demo --target web
+// Build:         spid3r run studio.matrix build examples/demo --target web|android|ios|desktop
+
+import "studio/App" as appkit;
+import "studio/State" as state;
+import "studio/Storage" as storage;
+import "studio/Theme" as theme;
+import "studio/Bridge" as br;
+import "studio/Http" as http;
+import "pages/Home" as p_home;
+import "pages/Detail" as p_detail;
+import "pages/Stats" as p_stats;
+
+let next_seq = 3;
+
+fn load_tasks() {
+    let t = storage.get_list("tasks");
+    if t.len() == 0 {
+        t = [
+        {
+            "id": "t1", "title": "Welcome to AppStudio", "done": true, "priority": "low", "tag": "General", "notes": ""
+        }
+        ,
+        {
+            "id": "t2", "title": "Tap a task to inspect details", "done": false, "priority": "medium", "tag": "Work", "notes": "Try priority & chips."
+        }
+        ,
+        {
+            "id": "t3", "title": "Toggle dark mode or filters", "done": false, "priority": "high", "tag": "Urgent", "notes": ""
+        }
+        ,
+        ];
+        storage.set("tasks", t);
+    }
+    state.set("tasks", t);
+}
+
+fn add_task(_ev) {
+    let draft = string(state.get_or("draft", "")).trim();
+    if draft == "" {
+        return;
+    }
+    next_seq += 1;
+    let t = state.get_list("tasks");
+    t.push({
+        "id": "tx" + string(next_seq),
+        "title": draft,
+        "done": false,
+        "priority": "medium",
+        "tag": "General",
+        "notes": "",
+    });
+    state.set("tasks", t);
+    state.set("draft", "");
+    state.set("toast_msg", "Added: " + draft);
+    storage.set("tasks", t);
+    br.haptic("light");
+}
+
+fn flip_theme(_ev) {
+    if string(theme.tokens()["mode"]) == "dark" {
+        theme.mode("light");
+    } else {
+        theme.mode("dark");
+    }
+    appkit.refresh_theme();
+}
+
+fn reset_data(_ev) {
+    storage.remove("tasks");
+    state.set("toast_msg", "Demo data reset");
+    load_tasks();
+}
+
+fn ask_clear(_ev) {
+    state.set("confirm_clear", true);
+}
+
+fn confirm_clear(_ev) {
+    let kept = [];
+    for item in state.get_list("tasks") {
+        if not (item.has("done") and item["done"] == true) {
+            kept.push(item);
+        }
+    }
+    state.set("tasks", kept);
+    state.set("confirm_clear", false);
+    state.set("toast_msg", "Completed tasks cleared");
+    storage.set("tasks", kept);
+}
+
+fn cancel_clear(_ev) {
+    state.set("confirm_clear", false);
+}
+
+fn dismiss_toast(_ev) {
+    state.drop("toast_msg");
+}
+
+fn copy_summary(_ev) {
+    let t = state.get_list("tasks");
+    br.copy_text("AppStudio Demo: " + string(t.len()) + " tasks");
+    br.haptic("medium");
+    state.set("toast_msg", "Copied summary to clipboard");
+}
+
+fn sync_api(_ev) {
+    state.set("syncing", true);
+    let ok = http.get_async("https://httpbin.org/get", "on_sync");
+    if not ok {
+        state.set("syncing", false);
+        state.set("sync_status", "Sync skipped");
+    }
+}
+
+fn on_sync(ev) {
+    state.set("syncing", false);
+    if ev["ok"] == true {
+        state.set("sync_status", "Synced (HTTP " + string(ev["status"]) + ")");
+    } else {
+        state.set("sync_status", "Offline / blocked: " + string(ev["error"]));
+    }
+}
+
+public fn studio_app() {
+    return appkit.App("Studio Demo", "sh.appstudio.demo", "1.0.0")
+    .page("Home", p_home.Home)
+    .page("Detail", p_detail.Detail)
+    .page("Stats", p_stats.Stats)
+    .handler("add_task", add_task)
+    .handler("flip_theme", flip_theme)
+    .handler("reset_data", reset_data)
+    .handler("ask_clear", ask_clear)
+    .handler("confirm_clear", confirm_clear)
+    .handler("cancel_clear", cancel_clear)
+    .handler("dismiss_toast", dismiss_toast)
+    .handler("copy_summary", copy_summary)
+    .handler("sync_api", sync_api)
+    .handler("on_sync", on_sync)
+    .boot(load_tasks)
+    .tab_pages([{
+        "label": "Home", "icon": "&#9989;"
+    }, {
+        "label": "Stats", "icon": "&#128202;"
+    },]);
+}

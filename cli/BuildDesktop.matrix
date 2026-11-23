@@ -1,0 +1,67 @@
+// cli/BuildDesktop.matrix
+// Self-contained desktop executable builder (AOT launcher + bytecode + embedded host).
+
+import "Fs" as fs;
+import "Manifest" as man;
+import "Exec" as ex;
+
+public fn build(appdir: string, entry: string, outdir: string) -> int {
+    fs.ensure_dir(outdir);
+    fs.setup_import_path();
+    let name = man.app_name_of(appdir);
+    let m = man.read_manifest(appdir);
+    let ver = man.app_version_of(appdir);
+    let host_abs = fs.abs_path(fs.trim_slash(fs.host_page(appdir)));
+    let ext = if fs.is_windows() {
+        ".exe" } else {
+        ""
+    };
+    let out_bin = outdir + "/" + name + ext;
+    println("building desktop app -> " + out_bin);
+
+    let bc = outdir + "/._tmp_" + fs.sanitize_swift_ident(name) + ".matrixc";
+    if not ex.run_checked("spid3r", ["compile", entry, "-o", bc], "compiling") {
+        return 1;
+    }
+
+    let launcher = outdir + "/_launcher.matrix";
+    if not fs.write_checked(launcher, "fn main() -> int {\n    return run_payload();\n}\n") {
+        remove_file(bc);
+        return 1;
+    }
+    let b_args = [
+    "build", launcher,
+    "-o", out_bin,
+    "--release",
+    "--bytecode", bc,
+    "--embed", host_abs,
+    "--bundle-runtime",
+    "--product-name", name,
+    "--version", ver,
+    ];
+    if fs.is_windows() {
+        b_args.push("--subsystem");
+        b_args.push("windows");
+    }
+    if m.has("icon") and string(m["icon"]).trim() != "" {
+        let icon_p = string(m["icon"]).trim();
+        if not fs.is_abs_path(icon_p) {
+            icon_p = fs.join_dir(appdir, icon_p);
+        }
+        if file_exists(icon_p) {
+            b_args.push("--icon");
+            b_args.push(icon_p);
+        }
+    }
+    let ok = ex.run_checked("spid3r", b_args, "building");
+    remove_file(launcher);
+    remove_file(bc);
+    if not ok {
+        return 1;
+    }
+    if not fs.copy_app_assets(appdir, outdir) {
+        return 1;
+    }
+    println("done: " + out_bin + " (self-contained binary)");
+    return 0;
+}

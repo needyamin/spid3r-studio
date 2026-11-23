@@ -1,0 +1,88 @@
+// cli/BuildIos.matrix
+// Generates an xtool-compatible SwiftPM package with a WKURLSchemeHandler host.
+
+import "Fs" as fs;
+import "Manifest" as man;
+import "Exec" as ex;
+import "BuildWeb" as b_web;
+
+public fn build(appdir: string, outdir: string, flat: string, client_js: string) -> int {
+    fs.ensure_dir(outdir);
+    fs.setup_import_path();
+    let name = man.app_name_of(appdir);
+    let bundle_id = man.app_bundle_id_of(appdir);
+    let swift_name = fs.sanitize_swift_ident(name);
+    let pkg = outdir + "/" + swift_name;
+    let src_dir = pkg + "/Sources/" + swift_name;
+    let resdir = src_dir + "/Resources/app";
+    fs.ensure_dir(pkg);
+    fs.ensure_dir(pkg + "/Sources");
+    fs.ensure_dir(src_dir);
+    fs.ensure_dir(src_dir + "/Resources");
+    fs.ensure_dir(resdir);
+
+    let assets = ex.wasm_runtime_assets(outdir + "/_runtime");
+    if assets == "" {
+        return 1;
+    }
+    if b_web.copy_wasm_assets(assets, resdir) != 0 {
+        return 1;
+    }
+    if not fs.copy_app_assets(appdir, resdir) {
+        return 1;
+    }
+
+    if not fs.write_checked(resdir + "/app.matrix", flat) {
+        return 1;
+    }
+    if b_web.fill_host_page(appdir, resdir, flat, client_js, false) != 0 {
+        return 1;
+    }
+
+    let xtool_icon = "";
+    let icon_src = man.app_icon_of(appdir);
+    if icon_src != "" and fs.file_ext(icon_src) == "png" {
+        if copy_file(icon_src, pkg + "/icon.png").is_ok() {
+            xtool_icon = "\niconPath: icon.png";
+        }
+    }
+
+    let vars = {
+        "APP_NAME": name,
+        "SWIFT_NAME": swift_name,
+        "BUNDLE_ID": bundle_id,
+        "PKG_DIR": pkg,
+        "IOS_DEPLOYMENT_TARGET": man.ios_deployment_target_of(appdir),
+        "XTOOL_ICON_LINE": xtool_icon,
+    };
+    let t_pkg = fs.render_template("targets/ios/Package.swift.tmpl", vars);
+    let t_app = fs.render_template("targets/ios/App.swift.tmpl", vars);
+    let t_xtool = fs.render_template("targets/ios/xtool.yml.tmpl", vars);
+    let t_readme = fs.render_template("targets/ios/README.md.tmpl", vars);
+    if t_pkg == "" or t_app == "" or t_xtool == "" or t_readme == "" {
+        return 1;
+    }
+    if not fs.write_checked(pkg + "/Package.swift", t_pkg) {
+        return 1;
+    }
+    if not fs.write_checked(src_dir + "/App.swift", t_app) {
+        return 1;
+    }
+    if not fs.write_checked(pkg + "/xtool.yml", t_xtool) {
+        return 1;
+    }
+    if not fs.write_checked(pkg + "/README.md", t_readme) {
+        return 1;
+    }
+
+    println("done: " + pkg);
+    println(
+        "  Package.swift / Sources/" + swift_name + "/App.swift (WKURLSchemeHandler) / xtool.yml"
+    );
+    println("  bundleID: " + bundle_id);
+    println("");
+    println("Deploy to iPhone (no Mac needed):");
+    println("  cd " + pkg);
+    println("  xtool dev");
+    return 0;
+}

@@ -1,0 +1,601 @@
+// studio/Render.matrix
+// Component tree -> HTML string. Components are plain maps (see Components.matrix).
+// Event handlers resolve to slot ids emitted as data-tap / data-input / data-change
+// attributes; the client runtime posts them back over the bridge.
+//
+// NOTE: missing map keys throw in spid3r — all optional prop reads use Util.prop.
+
+import "Bridge" as br;
+import "Router" as nav;
+import "Util" as U;
+
+// ---------- props -> attributes ----------
+
+fn css_dim(v) -> string {
+    let t = type_of(v);
+    if t == "int" or t == "float" {
+        return string(v) + "px";
+    }
+    return U.esc_css_val(string(v));
+}
+
+fn style_of(p: map) -> string {
+    let s = "";
+    if U.prop(p, "gap") != null {
+        s += "gap:" + string(p["gap"]) + "px;";
+    }
+    if U.prop(p, "align") != null {
+        s += "align-items:" + string(p["align"]) + ";";
+    }
+    if U.prop(p, "justify") != null {
+        s += "justify-content:" + string(p["justify"]) + ";";
+    }
+    if U.prop(p, "pad") != null {
+        s += "padding:" + string(p["pad"]) + "px;";
+    }
+    if U.prop(p, "wrap") == true {
+        s += "flex-wrap:wrap;";
+    }
+    if U.prop(p, "width") != null {
+        s += "width:" + css_dim(p["width"]) + ";";
+    }
+    if U.prop(p, "height") != null {
+        s += "height:" + css_dim(p["height"]) + ";";
+    }
+    if U.prop(p, "flex") != null {
+        s += "flex:" + string(p["flex"]) + ";";
+    }
+    if U.prop(p, "cols") != null {
+        let cols = U.ival(p, "cols", 2);
+        if cols < 1 {
+            cols = 1;
+        }
+        s += "grid-template-columns:repeat(" + string(cols) + ",minmax(0,1fr));";
+    }
+    if U.prop(p, "style") != null {
+        s += string(p["style"]);
+    }
+    return s;
+}
+
+fn is_disabled(p: map) -> bool {
+    return U.prop(p, "disabled") == true;
+}
+
+fn disabled_attr(p: map) -> string {
+    if is_disabled(p) {
+        return " disabled";
+    }
+    return "";
+}
+
+fn cls_of(p: map, base: string) -> string {
+    let c = base;
+    if U.prop(p, "cls") != null {
+        if c == "" {
+            c = string(p["cls"]);
+        } else {
+            c += " " + string(p["cls"]);
+        }
+    }
+    if is_disabled(p) {
+        if c == "" {
+            c = "disabled";
+        } else {
+            c += " disabled";
+        }
+    }
+    return c;
+}
+
+fn attrs(p: map, base_cls: string) -> string {
+    let a = " class=\"" + U.esc_attr(cls_of(p, base_cls)) + "\"";
+    let st = style_of(p);
+    if st != "" {
+        a += " style=\"" + U.esc_attr(st) + "\"";
+    }
+    if U.prop(p, "id") != null {
+        a += " id=\"" + U.esc_attr(string(p["id"])) + "\"";
+    }
+    if U.prop(p, "key") != null {
+        a += " data-key=\"" + U.esc_attr(string(p["key"])) + "\"";
+    }
+    if U.prop(p, "arg") != null {
+        a += " data-arg=\"" + U.esc_attr(string(p["arg"])) + "\"";
+    }
+    if U.prop(p, "role") != null {
+        a += " role=\"" + U.esc_attr(string(p["role"])) + "\"";
+    }
+    if U.prop(p, "aria_label") != null {
+        a += " aria-label=\"" + U.esc_attr(string(p["aria_label"])) + "\"";
+    }
+    if is_disabled(p) {
+        a += " aria-disabled=\"true\"";
+    }
+    if U.prop(p, "tabindex") != null {
+        a += " tabindex=\"" + U.esc_attr(string(p["tabindex"])) + "\"";
+    }
+    return a;
+}
+
+/// data-tap / data-input / data-change / data-submit attribute for an event prop.
+/// Handlers are handler names (string) or closures (auto slot).
+fn ev_attr(p: map, key: string, attr: string) -> string {
+    let h = U.prop(p, key);
+    if h == null {
+        return "";
+    }
+    let sid = "";
+    if type_of(h) == "string" {
+        sid = string(h);
+    } else {
+        sid = br.slot(h);
+    }
+    return " data-" + attr + "=\"" + U.esc_attr(sid) + "\"";
+}
+
+fn ev_attr_if(p: map, key: string, attr: string) -> string {
+    if is_disabled(p) {
+        return "";
+    }
+    return ev_attr(p, key, attr);
+}
+
+fn kids(n: map) -> list {
+    let c = U.prop(n, "children");
+    if c == null or type_of(c) != "list" {
+        return [];
+    }
+    return c;
+}
+
+fn kids_html(n: map) -> string {
+    let out = "";
+    for c in kids(n) {
+        out += node_html(c);
+    }
+    return out;
+}
+
+// ---------- element renderers ----------
+
+fn text_html(n: map) -> string {
+    let base = "";
+    if U.s(n, "cls") == "" {
+        base = "body";
+    }
+    return "<div" + attrs(n, base) + ">" + U.esc(U.s(n, "text")) + "</div>";
+}
+
+fn navbar_html(n: map) -> string {
+    let h = "<div class=\"navbar\" role=\"banner\">";
+    if nav.can_pop() {
+        h += "<button type=\"button\" class=\"nav-back\" aria-label=\"Back\" data-tap=\"" + br.slot((_ev) => nav.pop()) + "\">&#8249;</button>";
+    }
+    h += "<div class=\"navbar-title\">" + U.esc(U.s(n, "title")) + "</div>";
+    h += "<div class=\"navbar-actions\">" + kids_html(n) + "</div></div>";
+    return h;
+}
+
+fn tabbar_html(n: map) -> string {
+    let tabs = U.prop(n, "tabs");
+    if tabs == null or type_of(tabs) != "list" {
+        return "";
+    }
+    let active = U.ival(n, "active", 0);
+    let h = "<div class=\"tabbar\" role=\"tablist\">";
+    let i = 0;
+    for t in tabs {
+        let label = "";
+        let icon = "&#9633;";
+        if type_of(t) == "map" {
+            label = U.s(t, "label");
+            if U.prop(t, "icon") != null {
+                icon = string(t["icon"]);
+            }
+        } else {
+            label = string(t);
+        }
+        let c = "tab";
+        let sel = "false";
+        if i == active {
+            c += " active";
+            sel = "true";
+        }
+        let idx = i;
+        h += "<button type=\"button\" class=\"" + c + "\" role=\"tab\" aria-selected=\"" + sel + "\" data-tap=\"" + br.slot((_ev) => nav.switch_tab(idx)) + "\">"
+        + "<span class=\"icon\">" + U.esc_icon(icon) + "</span><span>" + U.esc(label) + "</span></button>";
+        i += 1;
+    }
+    return h + "</div>";
+}
+
+fn tile_html(n: map) -> string {
+    let tappable = U.prop(n, "onTap") != null;
+    let cls = "tile";
+    if tappable {
+        cls += " pressable";
+    }
+    let h = "<div" + attrs(n, cls) + ev_attr(n, "onTap", "tap") + ">";
+    if U.prop(n, "leading") != null {
+        h += node_html(n["leading"]);
+    }
+    h += "<div class=\"tile-main\">"
+    + "<div class=\"tile-title\">" + U.esc(U.s(n, "title")) + "</div>";
+    if U.s(n, "subtitle") != "" {
+        h += "<div class=\"tile-sub\">" + U.esc(U.s(n, "subtitle")) + "</div>";
+    }
+    h += "</div>";
+    if U.prop(n, "trailing") != null {
+        h += node_html(n["trailing"]);
+    } elif tappable {
+        h += "<span class=\"tile-chev\">&#8250;</span>";
+    }
+    return h + "</div>";
+}
+
+fn list_html(n: map) -> string {
+    let h = "<div" + attrs(n, "list") + ">";
+    let items = U.prop(n, "items");
+    if items == null or type_of(items) != "list" {
+        return h + "</div>";
+    }
+    let rf = U.prop(n, "renderItem");
+    let i = 0;
+    for item in items {
+        if rf != null {
+            h += node_html(rf(item, i));
+        } elif type_of(item) == "map" {
+            let tile = {
+                "el": "listtile", "title": U.s(item, "title")
+            };
+            if item.has("subtitle") {
+                tile["subtitle"] = item["subtitle"];
+            }
+            if item.has("onTap") {
+                tile["onTap"] = item["onTap"];
+            }
+            if item.has("key") {
+                tile["key"] = item["key"];
+            }
+            h += tile_html(tile);
+        } else {
+            let tile2 = {
+                "el": "listtile", "title": string(item)
+            };
+            h += tile_html(tile2);
+        }
+        i += 1;
+    }
+    return h + "</div>";
+}
+
+fn toggle_html(n: map) -> string {
+    let on = U.prop(n, "value") == true;
+    let c = "toggle";
+    let aria_chk = "false";
+    if on {
+        c += " on";
+        aria_chk = "true";
+    }
+    let arg = "0";
+    let next_val = "false";
+    if not on {
+        arg = "1";
+        next_val = "true";
+    }
+    let n2 = {
+        "el": "toggle", "arg": arg, "role": "switch", "tabindex": "0"
+    };
+    for (k, v) in n {
+        if k != "el" and k != "arg" {
+            n2[k] = v;
+        }
+    }
+    return "<div" + attrs(n2, c) + " aria-checked=\"" + aria_chk + "\" data-val=\"" + next_val + "\"" + ev_attr_if(n2, "onTap", "tap") + "><div class=\"knob\"></div></div>";
+}
+
+fn opt_pair(item) -> list {
+    if type_of(item) == "map" {
+        let lbl = U.s(item, "label");
+        let val = if U.prop(item, "value") != null {
+            string(item["value"])
+        } else {
+            lbl
+        };
+        if lbl == "" {
+            lbl = val;
+        }
+        return [val, lbl];
+    }
+    let s = string(item);
+    return [s, s];
+}
+
+fn checkbox_html(n: map) -> string {
+    let on = U.prop(n, "value") == true;
+    let aria_chk = if on {
+        "true"
+    } else {
+        "false"
+    };
+    let cattr = if on {
+        " checked"
+    } else {
+        ""
+    };
+    let lbl = U.s(n, "label");
+    let h = "<label" + attrs(n, "checkbox-row") + "><input type=\"checkbox\" class=\"checkbox-input\" aria-checked=\"" + aria_chk + "\"" + cattr + disabled_attr(n) + ev_attr_if(n, "onChange", "change") + ">";
+    if lbl != "" {
+        h += "<span>" + U.esc(lbl) + "</span>";
+    }
+    return h + "</label>";
+}
+
+fn select_html(n: map) -> string {
+    let opts = U.prop(n, "options");
+    let cur = U.s(n, "value");
+    let h = "<select" + attrs(n, "field select") + disabled_attr(n) + ev_attr_if(n, "onChange", "change") + ">";
+    if opts != null and type_of(opts) == "list" {
+        for item in opts {
+            let pair = opt_pair(item);
+            let ov = string(pair[0]);
+            let ol = string(pair[1]);
+            let sel = if ov == cur {
+                " selected"
+            } else {
+                ""
+            };
+            h += "<option value=\"" + U.esc_attr(ov) + "\"" + sel + ">" + U.esc(ol) + "</option>";
+        }
+    }
+    return h + "</select>";
+}
+
+fn segmented_html(n: map) -> string {
+    let opts = U.prop(n, "options");
+    let active = U.ival(n, "active", 0);
+    let dis = is_disabled(n);
+    let h = "<div" + attrs(n, "segmented") + " role=\"tablist\">";
+    if opts != null and type_of(opts) == "list" {
+        let idx = 0;
+        for item in opts {
+            let pair = opt_pair(item);
+            let ov = string(pair[0]);
+            let ol = string(pair[1]);
+            let sc = "seg-btn";
+            let sel = "false";
+            if idx == active {
+                sc += " active";
+                sel = "true";
+            }
+            h += "<button type=\"button\" class=\"" + sc + "\" role=\"tab\" aria-selected=\"" + sel + "\"" + disabled_attr(n);
+            if not dis {
+                h += " data-arg=\"" + string(idx) + "\" data-val=\"" + U.esc_attr(ov) + "\"" + ev_attr(n, "onChange", "tap");
+            }
+            h += ">" + U.esc(ol) + "</button>";
+            idx += 1;
+        }
+    }
+    return h + "</div>";
+}
+
+fn spinner_html(n: map) -> string {
+    let sz = U.ival(n, "size", 24);
+    if sz < 12 {
+        sz = 12;
+    }
+    let lbl = U.s(n, "label");
+    if lbl == "" {
+        lbl = "Loading";
+    }
+    return "<div" + attrs(n, "spinner") + " role=\"status\" aria-label=\"" + U.esc_attr(lbl) + "\"><div class=\"spinner-ring\" style=\"width:" + string(sz) + "px;height:" + string(sz) + "px;\"></div></div>";
+}
+
+fn dialog_html(n: map) -> string {
+    let wrap = {
+        "el": "dialogwrap"
+    };
+    let h = "<div" + attrs(wrap, "dialog-wrap") + ev_attr(n, "onDismiss", "tap") + ">"
+    + "<div" + attrs(n, "dialog") + " role=\"dialog\" aria-modal=\"true\" data-stop-tap=\"1\">";
+    let t = U.s(n, "title");
+    if t != "" {
+        h += "<div class=\"dialog-title\">" + U.esc(t) + "</div>";
+    }
+    let b = U.s(n, "body");
+    if b != "" {
+        h += "<div class=\"dialog-body\">" + U.esc(b) + "</div>";
+    }
+    return h + "<div class=\"dialog-actions\">" + kids_html(n) + "</div></div></div>";
+}
+
+fn chip_html(n: map) -> string {
+    let sel = U.prop(n, "selected") == true;
+    let c = "chip";
+    if sel {
+        c += " selected";
+    }
+    if U.prop(n, "onTap") != null {
+        let ap = if sel {
+            "true"
+        } else {
+            "false"
+        };
+        return "<button type=\"button\"" + attrs(n, c) + " aria-pressed=\"" + ap + "\"" + disabled_attr(n) + ev_attr_if(n, "onTap", "tap") + "><span>" + U.esc(U.s(n, "text")) + "</span></button>";
+    }
+    return "<span" + attrs(n, c) + ">" + U.esc(U.s(n, "text")) + "</span>";
+}
+
+// ---------- main dispatcher ----------
+
+public fn node_html(n: map) -> string {
+    let el = string(n["el"]);
+    if el == "page" {
+        let nav_h = "";
+        let body_h = "";
+        for c in kids(n) {
+            if type_of(c) == "map" and U.s(c, "el") == "navbar" {
+                nav_h += navbar_html(c);
+            } else {
+                body_h += node_html(c);
+            }
+        }
+        let cls = "page";
+        if nav_h != "" {
+            cls += " has-nav";
+        }
+        if U.prop(n, "flush") == true {
+            cls += " flush";
+        }
+        let key = "";
+        if U.prop(n, "pagekey") != null {
+            key = " data-pagekey=\"" + U.esc_attr(string(n["pagekey"])) + "\"";
+        }
+        return nav_h + "<div" + attrs(n, cls) + key + ">" + body_h + "</div>";
+    }
+    if el == "column" or el == "row" or el == "center" or el == "scroll" or el == "empty" or el == "grid" {
+        return "<div" + attrs(n, el) + ev_attr_if(n, "onTap", "tap") + ">" + kids_html(n) + "</div>";
+    }
+    if el == "form" {
+        return "<form" + attrs(n, "form") + ev_attr_if(n, "onSubmit", "submit") + ">" + kids_html(n) + "</form>";
+    }
+    if el == "spacer" {
+        let sz = U.ival(n, "size", 8);
+        if sz <= 0 or U.prop(n, "flex") != null {
+            return "<div class=\"spacer grow\"></div>";
+        }
+        let px = string(sz);
+        return "<div class=\"spacer\" style=\"width:" + px + "px;height:" + px + "px;\"></div>";
+    }
+    if el == "divider" {
+        return "<hr class=\"divider\">";
+    }
+    if el == "text" {
+        return text_html(n);
+    }
+    if el == "navbar" {
+        return navbar_html(n);
+    }
+    if el == "tabbar" {
+        return tabbar_html(n);
+    }
+    if el == "button" {
+        let btype = if U.s(n, "btn_type") == "submit" {
+            "submit"
+        } else {
+            "button"
+        };
+        return "<button type=\"" + btype + "\"" + attrs(n, "btn " + U.s(n, "variant")) + disabled_attr(n) + ev_attr_if(n, "onTap", "tap")
+        + "><span>" + U.esc(U.s(n, "text")) + "</span></button>";
+    }
+    if el == "iconbutton" {
+        return "<button type=\"button\"" + attrs(n, "iconbtn " + U.s(n, "variant")) + disabled_attr(n) + ev_attr_if(n, "onTap", "tap")
+        + ">" + U.esc_icon(U.s(n, "icon")) + "</button>";
+    }
+    if el == "fab" {
+        return "<button type=\"button\"" + attrs(n, "fab") + disabled_attr(n) + ev_attr_if(n, "onTap", "tap") + ">" + U.esc_icon(U.s(n, "icon")) + "</button>";
+    }
+    if el == "chip" {
+        return chip_html(n);
+    }
+    if el == "input" {
+        return "<input" + attrs(n, "field") + " type=\"" + U.esc_attr(U.s(n, "kind"))
+        + "\" placeholder=\"" + U.esc_attr(U.s(n, "placeholder"))
+        + "\" value=\"" + U.esc_attr(U.s(n, "value")) + "\"" + disabled_attr(n)
+        + ev_attr_if(n, "onInput", "input")
+        + ev_attr_if(n, "onChange", "change")
+        + ev_attr_if(n, "onSubmit", "submit") + ">";
+    }
+    if el == "textarea" {
+        return "<textarea" + attrs(n, "field") + " placeholder=\"" + U.esc_attr(U.s(n, "placeholder"))
+        + "\"" + disabled_attr(n) + ev_attr_if(n, "onInput", "input") + ev_attr_if(n, "onChange", "change") + ">" + U.esc(U.s(n, "value")) + "</textarea>";
+    }
+    if el == "checkbox" {
+        return checkbox_html(n);
+    }
+    if el == "select" or el == "picker" {
+        return select_html(n);
+    }
+    if el == "segmented" {
+        return segmented_html(n);
+    }
+    if el == "spinner" {
+        return spinner_html(n);
+    }
+    if el == "slider" {
+        return "<input" + attrs(n, "slider") + " type=\"range\" min=\"" + U.esc_attr(U.s(n, "min"))
+        + "\" max=\"" + U.esc_attr(U.s(n, "max")) + "\" value=\"" + U.esc_attr(U.s(n, "value"))
+        + "\"" + disabled_attr(n) + ev_attr_if(n, "onInput", "input") + ev_attr_if(n, "onChange", "change") + ">";
+    }
+    if el == "toggle" {
+        return toggle_html(n);
+    }
+    if el == "progress" {
+        let fv = U.fval(n, "value", 0.0);
+        if fv < 0.0 {
+            fv = 0.0;
+        } elif fv > 1.0 {
+            fv = 1.0;
+        }
+        let pct = int(fv * 100.0 + 0.5);
+        return "<div" + attrs(n, "progress") + " role=\"progressbar\" aria-valuemin=\"0\" aria-valuemax=\"100\" aria-valuenow=\"" + string(pct) + "\"><div class=\"fill\" style=\"width:" + string(pct) + "%\"></div></div>";
+    }
+    if el == "image" {
+        return "<img" + attrs(n, "img") + " src=\"" + U.esc_attr(U.safe_url(U.s(n, "src"))) + "\" alt=\"" + U.esc_attr(U.s(n, "alt")) + "\">";
+    }
+    if el == "avatar" {
+        let safe_src = U.safe_url(U.s(n, "src"));
+        if safe_src != "" {
+            return "<div class=\"avatar\"><img src=\"" + U.esc_attr(safe_src) + "\" alt=\"\"></div>";
+        }
+        return "<div class=\"avatar\">" + U.esc(U.s(n, "label")) + "</div>";
+    }
+    if el == "badge" {
+        return "<span" + attrs(n, "badge " + U.s(n, "color")) + ">" + U.esc(U.s(n, "text")) + "</span>";
+    }
+    if el == "card" {
+        return "<div" + attrs(n, "card") + ev_attr(n, "onTap", "tap") + ">" + kids_html(n) + "</div>";
+    }
+    if el == "listtile" {
+        return tile_html(n);
+    }
+    if el == "list" {
+        return list_html(n);
+    }
+    if el == "sheet" {
+        let wrap = {
+            "el": "sheetwrap"
+        };
+        let h = "<div" + attrs(wrap, "sheet-wrap") + ev_attr(n, "onDismiss", "tap") + ">"
+        + "<div class=\"sheet\" role=\"dialog\" aria-modal=\"true\" data-stop-tap=\"1\">" + kids_html(n) + "</div></div>";
+        return h;
+    }
+    if el == "dialog" {
+        return dialog_html(n);
+    }
+    if el == "toast" {
+        let tv = U.s(n, "variant");
+        if tv == "" {
+            tv = "info";
+        }
+        return "<div" + attrs(n, "toast " + tv) + " role=\"status\" aria-live=\"polite\"" + ev_attr_if(n, "onDismiss", "tap") + "><span>" + U.esc(U.s(n, "text")) + "</span></div>";
+    }
+    if el == "html" {
+        return U.s(n, "raw");
+    }
+    // unknown element: plain div passthrough
+    return "<div" + attrs(n, "") + ">" + kids_html(n) + "</div>";
+}
+
+/// Render a full document body: page node + optional bottom tab bar chrome.
+/// The tab bar appears only on tab roots (stack depth 1).
+public fn document(n: map, tabs: list, tab_index: int) -> string {
+    let h = node_html(n);
+    if tabs.len() > 1 and nav.depth() == 1 {
+        let bar = {
+            "el": "tabbar", "tabs": tabs, "active": tab_index
+        };
+        h += node_html(bar);
+    }
+    return h;
+}

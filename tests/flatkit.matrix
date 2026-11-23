@@ -1,0 +1,149 @@
+// tests/flatkit.matrix
+// Dedicated bundler tests for tools/FlatKit.matrix: lexer accuracy, multi-file DAGs,
+// global isolation, string interpolations, raw strings, comments, and Http bundling.
+
+import "tools/FlatKit" as flatkit;
+
+let passed = 0;
+let failed = 0;
+
+fn check_ok(cond: bool, name: string) {
+    if cond {
+        passed += 1;
+    } else {
+        failed += 1;
+        println("FAIL: " + name);
+    }
+}
+
+fn check_parses(src: string, tag: string) -> bool {
+    let tmp = "_test_flatkit_tmp/check_" + tag + ".matrix";
+    if write_file(tmp, src).is_err() {
+        return false;
+    }
+    let r = exec_capture("spid3r", ["check", tmp], null);
+    if r.is_err() {
+        return false;
+    }
+    return int(r.unwrap()["code"]) == 0;
+}
+
+fn main() -> int {
+    let dir = "_test_flatkit_tmp";
+    if is_dir(dir) {
+        dir_remove(dir);
+    }
+    dir_create(dir);
+    dir_create(dir + "/pages");
+
+    // 3-file topological dependency graph: app -> pages/B -> pages/A
+    let page_a = r#"import "../studio/Components" as ui;
+let local_tag = "alpha";
+public fn Banner() -> map {
+    return ui.badge("from_" + local_tag, "primary");
+}
+"#
+
+    ;
+    let page_b = r#"import "../studio/Components" as ui;
+import "../studio/State" as state;
+import "A" as a_mod;
+let local_tag = "beta";
+public fn ViewB() -> map {
+    let v = state.get_or("v", 9);
+    let _msg = "v={v} inner={state.get_or("k", 1)}";
+    return ui.column([a_mod.Banner(), ui.text("b:" + local_tag + ":" + string(v))]);
+}
+"#
+
+    ;
+    let raw2_decl = "    let raw2 = r#" + "\"" + "nested raw " + r#"{import}"# + "\"" + "#;\n";
+    let main_app = r#"// import "fake/comment_import" as fake;
+/* fn fake_block_fn() {
+   let cache = 0;
+} */
+import "studio/App" as appkit;
+import "studio/Components" as ui;
+import "studio/Http" as http;
+import "pages/B" as b_mod;
+
+let local_tag = "main";
+let cache = 99;
+
+class Worker {
+    public fn run(self) -> string {
+        return "worker_" + local_tag;
+    }
+}
+
+fn Home() -> map {
+    let w = Worker();
+    let _ref = http.get_async;
+    let raw1 = r"raw {import} fn dummy()";
+"#
+
+    + raw2_decl + r#"    let esc_s = "escaped \"import\" fn foo()";
+    return ui.page([
+        b_mod.ViewB(),
+        ui.text(w.run() + ":" + string(cache) + ":" + raw1 + ":" + raw2 + ":" + esc_s),
+    ]);
+}
+
+public fn studio_app() {
+    return appkit.App("FlatTest", "sh.test.flatkit", "1.0.0").page("Home", Home);
+}
+"#
+
+    ;
+
+    write_file(dir + "/pages/A.matrix", page_a);
+    write_file(dir + "/pages/B.matrix", page_b);
+    write_file(dir + "/app.matrix", main_app);
+
+    let flat = flatkit.bundle(dir);
+    check_ok(flat != "", "flatkit bundles 3-file app");
+    check_ok(
+        not flat.contains("\nimport \"") and not flat.starts_with("import \""),
+        "flatkit strips all top-level import directives"
+    );
+    check_ok(
+        flat.contains("// import \"fake/comment_import\""),
+        "flatkit preserves line comments"
+    );
+    check_ok(flat.contains("fn fake_block_fn()"), "flatkit preserves block comments");
+    check_ok(
+        flat.contains("mod_u_pages_A_local_tag") and flat.contains("mod_u_pages_B_local_tag") and flat.contains("mod_u_app_local_tag"),
+        "flatkit isolates colliding module globals"
+    );
+    check_ok(
+        flat.contains("mod_u_app_cache") and flat.contains("mod_Storage_cache"),
+        "flatkit isolates app global from Storage cache"
+    );
+    check_ok(flat.contains("w.run()"), "flatkit keeps custom class .run() method intact");
+    check_ok(flat.contains("pub_Http_get_async"), "flatkit bundles Http async functions");
+    check_ok(
+        flat.contains("pub_State_get_or"),
+        "flatkit rewrites nested interpolation expressions"
+    );
+
+    // Verify topological order: A declared before B, B before main
+    let idx_a = flat.index_of("pub_u_pages_A_Banner");
+    let idx_b = flat.index_of("pub_u_pages_B_ViewB");
+    let idx_m = flat.index_of("fn studio_app()");
+    check_ok(
+        idx_a >= 0 and idx_b > idx_a and idx_m > idx_b,
+        "topological dependency order A -> B -> app"
+    );
+
+    check_ok(check_parses(flat, "dag3"), "3-file flatkit bundle passes spid3r check");
+
+    let win_flat = flatkit.bundle("_test_flatkit_tmp");
+    check_ok(win_flat.contains("fn studio_app()"), "flatkit bundles local app path");
+
+    dir_remove(dir);
+    println("flatkit passed: " + string(passed) + "  failed: " + string(failed));
+    if failed > 0 {
+        return 1;
+    }
+    return 0;
+}

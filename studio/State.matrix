@@ -1,0 +1,83 @@
+// studio/State.matrix
+// Reactive app state: a plain key/value store. Every dispatched UI event is
+// followed by a page re-render, so mutating state in a handler is enough.
+
+let store = {
+};
+
+/// Read a value (null when unset).
+public fn get(k: string) -> any {
+    if store.has(k) {
+        return store[k];
+    }
+    return null;
+}
+
+/// Read with a default.
+public fn get_or(k: string, dflt) -> any {
+    if store.has(k) {
+        return store[k];
+    }
+    return dflt;
+}
+
+/// Write a value. Takes effect on the next render (after the current event).
+public fn set(k: string, v) {
+    store[k] = v;
+}
+
+/// Apply a function to a value in place: state.update("count", x => x + 1).
+public fn update(k: string, f) {
+    store[k] = f(get_or(k, null));
+}
+
+/// Number helpers.
+public fn incr(k: string, by: int = 1) {
+    store[k] = int(get_or(k, 0)) + by;
+}
+
+/// Read a list value (default []).
+public fn get_list(k: string) -> list {
+    if store.has(k) {
+        let v = store[k];
+        if type_of(v) == "list" {
+            return v;
+        }
+    }
+    return [];
+}
+
+/// Read a map value (default {}).
+public fn get_map(k: string) -> map {
+    if store.has(k) {
+        let v = store[k];
+        if type_of(v) == "map" {
+            return v;
+        }
+    }
+    return {
+    };
+}
+
+/// Remove a key.
+public fn drop(k: string) {
+    if store.has(k) {
+        store.remove(k);
+    }
+}
+
+/// Reset all state keys.
+public fn reset() {
+    store = {
+    };
+}
+
+/// Whole-store snapshot (used by Storage sync + tests).
+public fn snapshot() -> map {
+    return store;
+}
+
+/// Replace the whole store (used on boot restore).
+public fn restore(s: map) {
+    store = s;
+}

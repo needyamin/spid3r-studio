@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AppStudio Documentation</title>
+<style>
+  :root {
+    --bg: #f6f8fc;
+    --surface: #ffffff;
+    --surface-2: #eef2f9;
+    --text: #111827;
+    --muted: #526075;
+    --border: #dce3ee;
+    --primary: #4f46e5;
+    --primary-soft: rgba(79, 70, 229, 0.1);
+    --accent: #0ea5e9;
+    --ok: #16a34a;
+    --code-bg: #0f172a;
+    --code-fg: #e2e8f0;
+    --shadow: 0 4px 20px rgba(15, 23, 42, 0.05);
+    --radius: 12px;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", "Fira Code", Menlo, Consolas, monospace;
+  }
+  [data-theme="dark"] {
+    --bg: #0b0f1a;
+    --surface: #131a2b;
+    --surface-2: #1b243b;
+    --text: #f3f4f6;
+    --muted: #9aa7bd;
+    --border: #25314d;
+    --primary: #818cf8;
+    --primary-soft: rgba(129, 140, 248, 0.14);
+    --accent: #38bdf8;
+    --ok: #4ade80;
+    --code-bg: #070b14;
+    --code-fg: #e2e8f0;
+    --shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  a { color: var(--primary); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: var(--surface-2);
+    padding: 0.15em 0.42em;
+    border-radius: 6px;
+  }
+  pre {
+    position: relative;
+    margin: 14px 0;
+    padding: 14px 16px;
+    padding-right: 72px;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    border-radius: 10px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 0.86rem;
+    line-height: 1.5;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    color: inherit;
+    font-size: inherit;
+  }
+  .copy-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.08);
+    color: #e2e8f0;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.75rem;
+    font-family: var(--font);
+    cursor: pointer;
+  }
+  .copy-btn:hover { background: rgba(255, 255, 255, 0.18); }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+    max-width: 1320px;
+    margin: 0 auto;
+    gap: 28px;
+    padding: 24px 20px 64px;
+  }
+  aside.sidebar {
+    position: sticky;
+    top: 20px;
+    align-self: start;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 16px;
+    box-shadow: var(--shadow);
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+  }
+  .brand-title {
+    font-weight: 700;
+    font-size: 1.08rem;
+    letter-spacing: -0.01em;
+  }
+  .brand-badge {
+    display: inline-block;
+    margin-top: 2px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: var(--primary);
+    background: var(--primary-soft);
+    padding: 2px 8px;
+    border-radius: 999px;
+  }
+  .theme-btn {
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .nav-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .nav-list a {
+    display: block;
+    padding: 7px 10px;
+    border-radius: 8px;
+    color: var(--muted);
+    font-size: 0.9rem;
+    font-weight: 500;
+  }
+  .nav-list a:hover,
+  .nav-list a.active {
+    background: var(--primary-soft);
+    color: var(--primary);
+    text-decoration: none;
+  }
+  .sidebar-meta {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    font-size: 0.82rem;
+    color: var(--muted);
+  }
+
+  main.content {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+  .hero {
+    background: linear-gradient(135deg, var(--primary) 0%, #2563eb 100%);
+    color: #ffffff;
+    border-radius: 16px;
+    padding: 28px 30px;
+    box-shadow: var(--shadow);
+  }
+  .hero h1 {
+    margin: 0 0 8px;
+    font-size: 2rem;
+    letter-spacing: -0.02em;
+  }
+  .hero p {
+    margin: 0 0 16px;
+    color: rgba(255, 255, 255, 0.9);
+    max-width: 78ch;
+  }
+  .pill-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .pill {
+    font-size: 0.8rem;
+    font-weight: 600;
+    background: rgba(255, 255, 255, 0.16);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    padding: 4px 11px;
+    border-radius: 999px;
+  }
+
+  section.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px 26px;
+    box-shadow: var(--shadow);
+    scroll-margin-top: 20px;
+  }
+  section.card h2 {
+    margin: 0 0 12px;
+    font-size: 1.38rem;
+    letter-spacing: -0.01em;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+  }
+  section.card h3 {
+    margin: 18px 0 8px;
+    font-size: 1.05rem;
+  }
+  p { margin: 8px 0 12px; }
+  ul { margin: 8px 0 12px; padding-left: 20px; }
+  li { margin-bottom: 5px; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 0.92rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    background: var(--surface-2);
+    font-weight: 600;
+  }
+
+  .flow-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 14px;
+    margin: 14px 0;
+  }
+  .flow-box {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .flow-box h4 {
+    margin: 0 0 8px;
+    font-size: 0.98rem;
+    color: var(--primary);
+  }
+  .flow-steps {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+  }
+  .step-chip {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 4px 8px;
+    font-weight: 500;
+  }
+  .arrow { color: var(--muted); font-weight: 700; }
+
+  .callout {
+    background: var(--primary-soft);
+    border-left: 4px solid var(--primary);
+    padding: 12px 14px;
+    border-radius: 0 8px 8px 0;
+    margin: 12px 0;
+    font-size: 0.93rem;
+  }
+  .grid-2 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 14px;
+  }
+  .mini-card {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+  }
+  .mini-card h4 { margin: 0 0 6px; font-size: 0.96rem; }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; }
+    aside.sidebar { position: static; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">
+      <div>
+        <div class="brand-title">AppStudio Docs</div>
+        <span class="brand-badge">Spid3r v1.1.1</span>
+      </div>
+      <button type="button" class="theme-btn" id="theme-toggle" aria-label="Toggle theme">Theme</button>
+    </div>
+    <ul class="nav-list">
+      <li><a href="#overview">1. What Is AppStudio?</a></li>
+      <li><a href="#architecture">2. How It Works</a></li>
+      <li><a href="#commands">3. All CLI Commands</a></li>
+      <li><a href="#dev-commands">4. Developer &amp; Test Ops</a></li>
+      <li><a href="#quickstart">5. Quick Start &amp; Structure</a></li>
+      <li><a href="#modules">6. Core Modules &amp; UI</a></li>
+      <li><a href="#details">7. Key Technical Details</a></li>
+    </ul>
+    <div class="sidebar-meta">
+      <div>Roadmap: <strong>31 / 35 tasks done</strong></div>
+      <div style="margin-top:6px;">
+        <a href="plan.html">Open plan.html</a> · <a href="AGENTS.md">Open AGENTS.md</a>
+      </div>
+    </div>
+  </aside>
+
+  <main class="content">
+    <header class="hero">
+      <h1>AppStudio Framework &amp; CLI</h1>
+      <p>Write one declarative UI application in <code>spid3r</code> (<code>.matrix</code>) and run or package it natively for <strong>Desktop</strong>, <strong>Web</strong>, <strong>Android</strong>, and <strong>iOS</strong> — with zero Node/npm or JS framework dependencies.</p>
+      <div class="pill-row">
+        <span class="pill">Single Codebase (`app.matrix`)</span>
+        <span class="pill">Incremental DOM Morphing</span>
+        <span class="pill">Web Worker WASM Runtime</span>
+        <span class="pill">Unified Host Effects Protocol</span>
+      </div>
+    </header>
+
+    <section class="card" id="overview">
+      <h2>1. What Is AppStudio?</h2>
+      <p>AppStudio is a lightweight, batteries-included UI framework and multi-target build CLI written in <strong>Spid3r v1.1.1</strong>. Instead of maintaining separate apps in Kotlin, Swift, HTML/React, and Electron, you describe your screens, navigation tabs, state, storage, theme tokens, and handlers once in <code>app.matrix</code>.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Target</th>
+            <th>Host Runtime</th>
+            <th>Build Output</th>
+            <th>Requirements to Run / Package</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>desktop</code></td>
+            <td>Native OS WebView + compiled Spid3r VM</td>
+            <td>Self-contained executable (embedded bytecode + <code>host.html</code>)</td>
+            <td><code>spid3r</code> CLI only</td>
+          </tr>
+          <tr>
+            <td><code>web</code></td>
+            <td>Browser Web Worker + <code>spid3r.wasm</code> (with main-thread fallback)</td>
+            <td><code>index.html</code>, <code>app.matrix</code>, <code>spid3r.js</code>, <code>spid3r.wasm</code>, <code>wasmworker.js</code></td>
+            <td><code>spid3r</code> CLI; any HTTP server to view</td>
+          </tr>
+          <tr>
+            <td><code>android</code></td>
+            <td>Android <code>WebView</code> + <code>WebViewAssetLoader</code> + <code>spid3r.wasm</code></td>
+            <td>Full Gradle Kotlin project (<code>AndroidApp/</code>) with hardware Back support</td>
+            <td>Java + Android Studio / Gradle + Android SDK for APK</td>
+          </tr>
+          <tr>
+            <td><code>ios</code></td>
+            <td>iOS <code>WKWebView</code> + custom <code>WKURLSchemeHandler</code> (<code>appstudio://app/</code>) + <code>spid3r.wasm</code></td>
+            <td>SwiftPM + <code>xtool.yml</code> package (works from Windows/Linux/macOS via <code>xtool</code>)</td>
+            <td><code>xtool</code> (deploy to iPhone without a Mac) or Xcode</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card" id="architecture">
+      <h2>2. How It Works (Runtime Architecture)</h2>
+      <p>AppStudio shares one declarative component model across two execution modes tailored to each platform:</p>
+
+      <div class="flow-grid">
+        <div class="flow-box">
+          <h4>Mode A — Native Desktop (`run`, `dev`, `desktop` build)</h4>
+          <div class="flow-steps">
+            <span class="step-chip"><code>main.matrix</code> shims</span>
+            <span class="arrow">&rarr;</span>
+            <span class="step-chip"><code>App.run()</code> injects CSS &amp; <code>ClientJS</code></span>
+            <span class="arrow">&rarr;</span>
+            <span class="step-chip"><code>window.__studio.patch()</code></span>
+            <span class="arrow">&rarr;</span>
+            <span class="step-chip"><code>window.ipc</code> &rarr; <code>Bridge</code></span>
+          </div>
+          <p style="margin-top:10px;font-size:0.9rem;color:var(--muted);">State stays live in the native Spid3r process. After startup, <code>App.render()</code> patches DOM differences via <code>window.__studio.patch</code> and flushes queued host effects via <code>flush_native_effects()</code>.</p>
+        </div>
+
+        <div class="flow-box">
+          <h4>Mode B — Web, Android &amp; iOS (`wasm_run` Stateless REPL)</h4>
+          <div class="flow-steps">
+            <span class="step-chip"><code>FlatKit.matrix</code> bundles single <code>app.matrix</code></span>
+            <span class="arrow">&rarr;</span>
+            <span class="step-chip"><code>wasmworker.js</code> loads <code>spid3r.wasm</code></span>
+            <span class="arrow">&rarr;</span>
+            <span class="step-chip">Envelope JSON in</span>
+            <span class="arrow">&rarr;</span>
+            <span class="step-chip"><code>@@STUDIO_FRAME@@</code> out</span>
+          </div>
+          <p style="margin-top:10px;font-size:0.9rem;color:var(--muted);">Every UI event posts a JSON envelope (<code>event</code>, <code>router</code>, <code>state</code>, <code>storage</code>, <code>theme</code>, <code>theme_version</code>, <code>caps</code>) into the off-thread Web Worker, which returns one atomic frame updating DOM morph, <code>localStorage</code> persistence, dirty CSS, and side effects.</p>
+        </div>
+      </div>
+
+      <h3>Key Architectural Highlights</h3>
+      <ul>
+        <li><strong>FlatKit Bundler (<code>tools/FlatKit.matrix</code>):</strong> Uses a string/comment-aware lexer to bundle <code>studio/*</code> (in deterministic <code>fw_order</code>) plus multi-file user imports into one isolated WASM-ready file without breaking comments, strings, or string interpolations.</li>
+        <li><strong>DOM Morphing (<code>studio/ClientJS.matrix</code>):</strong> Diffs only changed elements, attributes, and text nodes, reuses elements with <code>data-key</code>, and preserves focus/cursor position plus active typing when debounced input events are still pending.</li>
+        <li><strong>Worker + Busy Bar (<code>targets/wasmworker.js</code> &amp; <code>targets/wasmhost.template.html</code>):</strong> Keeps the UI responsive while evaluating WASM off the main thread, displays a slim <code>#studio-busy</code> indicator after <code>120ms</code> on slow evaluations, and falls back to main-thread execution if Workers are blocked.</li>
+        <li><strong>CSS Dirty-Tracking (<code>studio/Theme.matrix</code>):</strong> Increments <code>Theme.version()</code> on theme mutations so subsequent frames emit <code>"css": ""</code> unless the theme actually changed.</li>
+      </ul>
+    </section>
+
+    <section class="card" id="commands">
+      <h2>3. All CLI Commands (`studio.matrix`)</h2>
+      <p>Run all CLI operations from the AppStudio repository root using <code>spid3r run studio.matrix &lt;command&gt;</code>:</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Command</th>
+            <th>Purpose &amp; Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>spid3r run studio.matrix doctor</code></td>
+            <td>Audits installed tools: <code>spid3r</code>, <code>xtool</code>, <code>swift</code>, <code>java</code>, <code>gradle</code>, <code>adb</code>, and <code>ANDROID_HOME</code> / <code>ANDROID_SDK_ROOT</code>.</td>
+          </tr>
+          <tr>
+            <td><code>spid3r run studio.matrix new &lt;AppName&gt; [outdir]</code></td>
+            <td>Creates a self-contained project from <code>templates/starter/</code> and vendors <code>studio/*</code> into <code>vendor/studio/</code> alongside <code>targets/host.html</code> and <code>studio.json</code>.</td>
+          </tr>
+          <tr>
+            <td><code>spid3r run studio.matrix run &lt;appdir&gt;</code></td>
+            <td>Launches the native desktop preview window (`spid3r gui &lt;entry&gt; --html &lt;host&gt;`). Close the window to exit.</td>
+          </tr>
+          <tr>
+            <td><code>spid3r run studio.matrix dev &lt;appdir&gt; [--target web] [--port N]</code></td>
+            <td>Launches native hot-reload preview, or serves <code>build/web/</code> over HTTP with auto-rebuild when <code>--target web</code> is passed.</td>
+          </tr>
+          <tr>
+            <td><code>spid3r run studio.matrix check &lt;appdir&gt;</code></td>
+            <td>Runs static analysis (`spid3r check`) on the app entry without opening a GUI window.</td>
+          </tr>
+          <tr>
+            <td><code>spid3r run studio.matrix build &lt;appdir&gt; [--target T] [-o &lt;outdir&gt;]</code></td>
+            <td>Packages the app (including <code>assets/</code> &amp; <code>studio.json</code> icon/theme/SDK settings) for <code>web</code> (default), <code>android</code>, <code>ios</code>, or <code>desktop</code>.</td>
+          </tr>
+          <tr>
+            <td><code>spid3r run studio.matrix test [filter]</code></td>
+            <td>Runs <code>spid3r fmt --check</code>, <code>spid3r check --deny-warnings</code> on every file, and all test suites in <code>tests/</code>.</td>
+          </tr>
+          <tr>
+            <td><code>spid3r run studio.matrix clean [appdir] [--cache]</code></td>
+            <td>Deletes <code>&lt;appdir&gt;/build</code>, temporary flags, and leftover test directories (plus <code>.studio-cache/</code> when <code>--cache</code> is passed).</td>
+          </tr>
+          <tr>
+            <td><code>spid3r run studio.matrix upgrade &lt;appdir&gt;</code></td>
+            <td>Refreshes vendored <code>vendor/studio/*.matrix</code> and <code>targets/host.html</code> inside an app created with <code>studio new</code>.</td>
+          </tr>
+          <tr>
+            <td><code>spid3r run studio.matrix help</code></td>
+            <td>Displays CLI command summary and flags.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Target Build Examples</h3>
+<pre><button type="button" class="copy-btn">Copy</button><code># Check environment
+spid3r run studio.matrix doctor
+
+# Create a new project
+spid3r run studio.matrix new MyApp
+
+# Run &amp; hot-reload during development (native or browser)
+spid3r run studio.matrix run examples/demo
+spid3r run studio.matrix dev examples/demo
+spid3r run studio.matrix dev examples/demo --target web --port 8080
+
+# Package for each platform (optional -o sets custom output directory)
+spid3r run studio.matrix build examples/demo --target web
+spid3r run studio.matrix build examples/demo --target desktop
+spid3r run studio.matrix build examples/demo --target android
+spid3r run studio.matrix build examples/demo --target ios
+
+# Verify formatting, compiler warnings, and all 4 test suites
+spid3r run studio.matrix test</code></pre>
+      <div class="callout">
+        <strong>After building:</strong> Serve <code>build/web/</code> over HTTP (for example <code>python -m http.server</code>) to test in a browser; open <code>build/android/AndroidApp/</code> in Android Studio or run <code>gradle assembleDebug</code>; run <code>xtool dev</code> inside <code>build/ios/&lt;SwiftName&gt;/</code> to deploy to iPhone; or launch the compiled binary directly in <code>build/desktop/</code>.
+      </div>
+    </section>
+
+    <section class="card" id="dev-commands">
+      <h2>4. Framework Developer &amp; Verification Operations</h2>
+      <p>Use these commands when working inside the AppStudio framework itself (PowerShell examples):</p>
+<pre><button type="button" class="copy-btn">Copy</button><code># Run all formatting, compiler checks, and 4 test suites in one command
+Remove-Item Env:SPID3R_PATH -ErrorAction SilentlyContinue
+spid3r run studio.matrix test
+
+# Or run individual suites directly
+$env:SPID3R_PATH = '.'
+spid3r run tests/framework.matrix
+spid3r run tests/security.matrix
+spid3r run tests/flatkit.matrix
+spid3r run tests/wasm_protocol.matrix
+
+# Native GUI headless smoke test (prints boot eval calls and exits immediately)
+spid3r gui examples/demo/main.matrix --html targets/host.html --dry-run once</code></pre>
+    </section>
+
+    <section class="card" id="quickstart">
+      <h2>5. Quick Start &amp; Project Layout</h2>
+      <p>Every AppStudio app uses <code>app.matrix</code> for UI and logic, plus a minimal <code>main.matrix</code> that connects the entry-only native GUI functions:</p>
+
+      <div class="grid-2">
+        <div>
+          <h3><code>app.matrix</code></h3>
+<pre><button type="button" class="copy-btn">Copy</button><code>import "studio/App" as appkit;
+import "studio/Components" as ui;
+import "studio/State" as state;
+
+fn inc(_ev) {
+    state.set("n", state.get_or("n", 0) + 1);
+}
+
+fn Home() -&gt; map {
+    let n = state.get_or("n", 0);
+    return ui.page([
+        ui.navbar("Counter"),
+        ui.card([
+            ui.title("Count: " + string(n)),
+            ui.spacer(12),
+            ui.button("Increment", "inc")
+        ])
+    ]);
+}
+
+public fn studio_app() {
+    return appkit.App("Counter", "com.example.counter", "1.0.0")
+        .page("Home", Home)
+        .handler("inc", inc);
+}</code></pre>
+        </div>
+
+        <div>
+          <h3><code>main.matrix</code> &amp; Directory Tree</h3>
+<pre><button type="button" class="copy-btn">Copy</button><code>import "app" as app;
+
+fn studio_title(t: string) { gui_title(t); }
+fn studio_html(h: string) { gui_set_html(h); }
+fn studio_eval(js: string) { gui_eval(js); }
+fn studio_on(n: string, cb) { gui_on(n, cb); }
+fn studio_emit(n: string, p: string) { gui_emit(n, p); }
+
+fn main() -&gt; int {
+    return app.studio_app()
+        .bridge(studio_title, studio_html, studio_eval, studio_on, studio_emit)
+        .run();
+}</code></pre>
+<pre><button type="button" class="copy-btn">Copy</button><code>MyApp/
+├── app.matrix          # Screens, state, handlers, studio_app()
+├── main.matrix         # Entry file + 5 native GUI shims
+├── studio.json         # App name, bundleID, version, entry
+├── spider.toml         # Module import paths (vendor/studio)
+├── pages/              # Optional submodules (bundled by FlatKit)
+├── storage/            # Local persistent kv.json storage (desktop)
+├── targets/host.html   # WebView HTML host shell
+└── vendor/studio/      # Vendored framework runtime modules</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="modules">
+      <h2>6. Core Modules &amp; Declarative UI Primitives</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Module (`studio/`)</th>
+            <th>Core APIs &amp; Role</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>App</code></td>
+            <td><code>App(name, bundleID, ver)</code>, <code>.page()</code>, <code>.handler()</code>, <code>.tab_pages()</code>, <code>.data_dir()</code>, <code>.boot()</code>, <code>.bridge()</code>, <code>.run()</code>, <code>.wasm_run()</code>, <code>.restyle()</code>, <code>refresh_theme()</code></td>
+          </tr>
+          <tr>
+            <td><code>Components</code></td>
+            <td>
+              <strong>Layout:</strong> <code>page</code>, <code>node</code>, <code>column</code>, <code>row</code>, <code>grid</code>, <code>scroll</code>, <code>center</code>, <code>spacer</code>, <code>flex_spacer</code>, <code>divider</code><br>
+              <strong>Text &amp; Chrome:</strong> <code>text</code>, <code>title</code>, <code>subtitle</code>, <code>caption</code>, <code>navbar</code>, <code>tabbar</code>, <code>fab</code><br>
+              <strong>Buttons &amp; Inputs:</strong> <code>button</code>, <code>iconbutton</code>, <code>chip</code>, <code>form</code>, <code>input</code>, <code>textarea</code>, <code>checkbox</code>, <code>select</code>, <code>picker</code>, <code>segmented</code>, <code>toggle</code>, <code>slider</code> (all support <code>disabled</code> &amp; ARIA props)<br>
+              <strong>Feedback &amp; Lists:</strong> <code>progress</code>, <code>spinner</code>, <code>dialog</code>, <code>confirm</code>, <code>toast</code>, <code>sheet</code>, <code>image</code>, <code>avatar</code>, <code>badge</code>, <code>card</code>, <code>card_text</code>, <code>listtile</code>, <code>list</code>, <code>html</code>, <code>empty</code>
+            </td>
+          </tr>
+          <tr>
+            <td><code>State</code> &amp; <code>Storage</code></td>
+            <td><code>State</code> manages volatile in-memory state (<code>get</code>, <code>get_or</code>, <code>set</code>, <code>drop</code>, <code>snapshot</code>, <code>restore</code>). <code>Storage</code> persists JSON KV data atomically via temp+rename on desktop and <code>localStorage</code> on web/mobile.</td>
+          </tr>
+          <tr>
+            <td><code>Router</code></td>
+            <td>Per-tab navigation stacks: <code>push(page, params)</code>, <code>pop()</code>, <code>replace(page, params)</code>, <code>switch_tab(idx)</code>, <code>can_pop()</code>, <code>params()</code>, <code>depth()</code>. Hardware Back pops when <code>depth() &gt; 1</code>.</td>
+          </tr>
+          <tr>
+            <td><code>Theme</code> &amp; <code>CSS</code></td>
+            <td><code>Theme.mode("dark" | "light")</code>, <code>primary(color)</code>, <code>custom(overrides)</code>, <code>version()</code> dirty-tracking. <code>CSS.stylesheet()</code> builds sanitized <code>:root</code> CSS variables and component styles.</td>
+          </tr>
+          <tr>
+            <td><code>Bridge</code></td>
+            <td>Event routing + Host Effects &amp; Capabilities: <code>copy_text(s)</code>, <code>open_url(url)</code>, <code>haptic(style)</code>, <code>platform()</code>, <code>prefers_dark()</code>, <code>caps()</code>.</td>
+          </tr>
+          <tr>
+            <td><code>Http</code></td>
+            <td>Uniform <code>{ok, status, body, json, error}</code> wrapper: sync <code>get</code>/<code>post_json</code>/<code>put_json</code>/<code>del</code>/<code>request</code> (native) and async <code>get_async</code>/<code>post_json_async</code>/<code>put_json_async</code>/<code>del_async</code>/<code>request_async</code> (uses Host Effects on web/mobile).</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card" id="details">
+      <h2>7. Key Technical Details &amp; Best Practices</h2>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>Named Handlers for Async &amp; Lists</h4>
+          <p>On Web/Android/iOS, WASM re-evaluates fresh on each event. Register async HTTP callbacks with <code>app.handler("on_data", on_data)</code> and pass <code>"on_data"</code> as a string to <code>Http.get_async(url, "on_data")</code>. Add <code>"key": "..."</code> props on dynamic cards or list items so DOM morphing emits <code>data-key</code> and reuses nodes across reorders.</p>
+        </div>
+        <div class="mini-card">
+          <h4>Security &amp; Fault Isolation Built In</h4>
+          <p><code>Util</code> validates image/avatar URLs (<code>safe_url</code>), sanitizes CSS variables (<code>esc_css_val</code>), and escapes icons, attributes, and text. Both native desktop and WebView hosts include restrictive CSP headers. Boot, handler, and render failures render structured error cards instead of white screens.</p>
+        </div>
+        <div class="mini-card">
+          <h4>Host Capabilities (`Bridge.caps()`)</h4>
+          <p>Before running boot or event handlers, the host runtime populates <code>platform</code> (<code>"native"</code>, <code>"web"</code>, <code>"android"</code>, or <code>"ios"</code>), <code>prefers_dark</code>, and <code>viewport_width</code>, enabling adaptive layouts and platform-aware logic inside one codebase.</p>
+        </div>
+        <div class="mini-card">
+          <h4>WASM Runtime Caching (<code>.studio-cache/</code>)</h4>
+          <p>The first Web, Android, or iOS build extracts <code>spid3r.js</code> and <code>spid3r.wasm</code> once into a versioned <code>.studio-cache/&lt;version&gt;/</code> directory (gitignored) and reuses it across subsequent builds.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+(function() {
+  var root = document.documentElement;
+  var key = 'appstudio:docs:theme';
+  try {
+    var saved = localStorage.getItem(key);
+    if (saved === 'dark' || saved === 'light') {
+      root.setAttribute('data-theme', saved);
+    } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      root.setAttribute('data-theme', 'dark');
+    }
+  } catch (_e) {}
+
+  var btn = document.getElementById('theme-toggle');
+  if (btn) {
+    btn.addEventListener('click', function() {
+      var next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      try { localStorage.setItem(key, next); } catch (_e) {}
+    });
+  }
+
+  var copyButtons = document.querySelectorAll('.copy-btn');
+  for (var i = 0; i < copyButtons.length; i++) {
+    copyButtons[i].addEventListener('click', function() {
+      var pre = this.parentNode;
+      var code = pre ? pre.querySelector('code') : null;
+      var button = this;
+      if (!code) { return; }
+      var text = code.textContent || '';
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() {
+          button.textContent = 'Copied';
+          setTimeout(function() { button.textContent = 'Copy'; }, 1200);
+        });
+      }
+    });
+  }
+
+  var links = document.querySelectorAll('.nav-list a');
+  for (var j = 0; j < links.length; j++) {
+    links[j].addEventListener('click', function() {
+      for (var k = 0; k < links.length; k++) { links[k].classList.remove('active'); }
+      this.classList.add('active');
+    });
+  }
+})();
+</script>
+</body>
+</html>

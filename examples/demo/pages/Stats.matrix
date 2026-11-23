@@ -1,0 +1,64 @@
+// examples/demo/pages/Stats.matrix
+// Insights tab demonstrating grid layout, progress, slider, spinner, disabled state, effects, and async Http.
+
+import "studio/Components" as ui;
+import "studio/State" as state;
+import "studio/Theme" as theme;
+import "studio/Bridge" as br;
+
+public fn Stats() -> map {
+    let t = state.get_list("tasks");
+    let total = t.len();
+    let done = 0;
+    for x in t {
+        if x.has("done") and x["done"] == true {
+            done += 1;
+        }
+    }
+    let frac = 0.0;
+    if total > 0 {
+        frac = float(done) / float(total);
+    }
+    let goal = int(state.get_or("goal", 5));
+    let syncing = state.get_or("syncing", false) == true;
+    let sync_status = string(state.get_or("sync_status", "Idle (" + br.platform() + ")"));
+
+    let sync_row = if syncing {
+        ui.row([ui.spinner(18, "Syncing"), ui.caption("Fetching quote...")], {
+            "gap": 8
+        })
+    } else {
+        ui.caption(sync_status)
+    };
+
+    return ui.page([ui.navbar("Stats"), ui.grid(
+        [
+        ui.card([ui.caption("Total Tasks"), ui.text(string(total), "h2")]),
+        ui.card([ui.caption("Completed"), ui.text(string(done), "h2")]),
+        ],
+        2,
+        10
+    ), ui.spacer(10), ui.card([ui.row([ui.title("Completion Progress"), ui.flex_spacer(), ui.badge("{done} / {total}", if total > 0 and done == total {
+        "success"
+    } else {
+        "primary"
+    }),]), ui.spacer(8), ui.progress(frac), ui.spacer(10), ui.caption("Daily goal: " + string(goal) + " tasks"), ui.slider(float(goal), 1.0, 20.0, (_ev) => {
+        state.set("goal", int(float(_ev["value"])));
+    }),]), ui.spacer(10), ui.card([ui.row(
+        [
+        ui.title("Appearance & Effects"),
+        ui.flex_spacer(),
+        ui.badge(string(theme.tokens()["mode"]), "accent"),
+        ]
+    ), ui.spacer(8), ui.row([ui.button("Toggle dark mode", "flip_theme", "primary", {
+        "flex": 1
+    }), ui.button("Copy stats", "copy_summary", "secondary"),], {
+        "gap": 8
+    }), ui.spacer(8), ui.row([ui.button("Sync Status", "sync_api", "outline", {
+        "flex": 1
+    }), ui.button("Clear Done", "ask_clear", "danger", {
+        "disabled": done == 0
+    }),], {
+        "gap": 8
+    }), ui.spacer(6), sync_row,]), ui.spacer(10), ui.button("Reset demo data", "reset_data", "outline"), ui.spacer(8), ui.caption("Built with AppStudio \u2022 spid3r"),]);
+}

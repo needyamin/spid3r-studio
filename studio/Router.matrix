@@ -1,0 +1,196 @@
+// studio/Router.matrix
+// Navigation: a push/pop stack per tab plus a bottom tab bar.
+// Tab roots each get their own stack; switching tabs restores that tab's stack.
+
+let stacks = [];  // stacks[i] = list of {"page": name, "params": map}
+let tab_names = [];  // tab labels in order
+let active_tab = 0;
+
+/// Configure tabs. pages: list of page names, or {"label","icon"} maps
+/// ("label" is the page name). Icons are preserved for the tab bar renderer.
+public fn configure(pages: list) {
+    tab_names = [];
+    stacks = [];
+    let i = 0;
+    while i < pages.len() {
+        let p = pages[i];
+        let label = "";
+        if type_of(p) == "map" {
+            label = string(p["label"]);
+        } else {
+            label = string(p);
+        }
+        tab_names.push(p);
+        let st = [];
+        st.push({
+            "page": label, "params": {
+            }
+        });
+        stacks.push(st);
+        i += 1;
+    }
+    active_tab = 0;
+}
+
+/// Single-page app mode: one root, no tab bar.
+public fn configure_single(root: string) {
+    configure([root]);
+}
+
+/// Reset navigation stacks and active tab.
+public fn reset() {
+    stacks = [];
+    tab_names = [];
+    active_tab = 0;
+}
+
+/// Push a page onto the active tab's stack.
+public fn push(name: string, params: map = {
+}) {
+    if stacks.len() == 0 {
+        configure_single(name);
+        stacks[0][0]["params"] = params;
+        return;
+    }
+    stacks[active_tab].push({
+        "page": name, "params": params
+    });
+}
+
+/// Pop the active tab's stack (no-op at the root).
+public fn pop() {
+    if stacks.len() == 0 {
+        return;
+    }
+    let st = stacks[active_tab];
+    if st.len() > 1 {
+        st.pop();
+    }
+}
+
+/// Replace the top of the active stack (including root at depth 1).
+public fn replace(name: string, params: map = {
+}) {
+    if stacks.len() == 0 {
+        configure_single(name);
+        stacks[0][0]["params"] = params;
+        return;
+    }
+    let st = stacks[active_tab];
+    if st.len() > 0 {
+        st.pop();
+    }
+    st.push({
+        "page": name, "params": params
+    });
+}
+
+/// Switch to a tab (preserves each tab's existing stack).
+public fn switch_tab(i: int) {
+    if i < 0 or i >= stacks.len() {
+        return;
+    }
+    active_tab = i;
+}
+
+/// Current page name ("" when unconfigured).
+public fn page_name() -> string {
+    if stacks.len() == 0 or stacks[active_tab].len() == 0 {
+        return "";
+    }
+    return string(stacks[active_tab][stacks[active_tab].len() - 1]["page"]);
+}
+
+/// Params passed to the current page.
+public fn params() -> map {
+    if stacks.len() == 0 or stacks[active_tab].len() == 0 {
+        return {
+        };
+    }
+    return stacks[active_tab][stacks[active_tab].len() - 1]["params"];
+}
+
+/// Stack depth of the active tab (1 = root, 0 when unconfigured).
+public fn depth() -> int {
+    if stacks.len() == 0 {
+        return 0;
+    }
+    return stacks[active_tab].len();
+}
+
+/// Whether the active tab's stack has anywhere to go back to.
+public fn can_pop() -> bool {
+    if stacks.len() == 0 {
+        return false;
+    }
+    return stacks[active_tab].len() > 1;
+}
+
+/// Number of configured root stacks (1 in single-page mode, 0 when unconfigured).
+public fn tab_count() -> int {
+    return stacks.len();
+}
+
+public fn tab_index() -> int {
+    return active_tab;
+}
+
+/// Labels for the tab bar renderer.
+public fn tabs() -> list {
+    return tab_names;
+}
+
+// ---------- wasm REPL persistence ----------
+
+/// Snapshot the navigation state for the host to carry across evals.
+public fn snapshot() -> map {
+    let st = [];
+    for s in stacks {
+        let st2 = [];
+        for e in s {
+            st2.push({
+                "page": string(e["page"]), "params": e["params"]
+            });
+        }
+        st.push(st2);
+    }
+    return {
+        "stacks": st, "tabs": tab_names, "active": active_tab
+    };
+}
+
+/// Restore navigation state carried by the host (best effort).
+public fn restore(m: map) {
+    if not m.has("stacks") or type_of(m["stacks"]) != "list" or m["stacks"].len() == 0 {
+        return;
+    }
+    let st = m["stacks"];
+    let new_tabs = [];
+    let new_stacks = [];
+    for s in st {
+        if type_of(s) != "list" or s.len() == 0 {
+            return;
+        }
+        let top = s[0];
+        if type_of(top) != "map" or not top.has("page") {
+            return;
+        }
+        new_tabs.push(string(top["page"]));
+        new_stacks.push(s);
+    }
+    stacks = new_stacks;
+    // keep the original tab entries (icons!) when they match the restored tabs
+    let tabs_src = [];
+    if m.has("tabs") and type_of(m["tabs"]) == "list" and m["tabs"].len() == new_tabs.len() {
+        tabs_src = m["tabs"];
+    } else {
+        tabs_src = new_tabs;
+    }
+    tab_names = tabs_src;
+    if m.has("active") {
+        let a = int(m["active"]);
+        if a >= 0 and a < stacks.len() {
+            active_tab = a;
+        }
+    }
+}

@@ -1,0 +1,78 @@
+// examples/demo/pages/Detail.matrix
+// Pushed task inspector page demonstrating checkbox, select, chips, textarea, and pop navigation.
+
+import "studio/Components" as ui;
+import "studio/State" as state;
+import "studio/Storage" as storage;
+import "studio/Router" as nav;
+
+public fn Detail() -> map {
+    let p = nav.params();
+    let idx = 0;
+    if p.has("idx") {
+        idx = int(p["idx"]);
+    }
+    let tasks = state.get_list("tasks");
+    if idx < 0 or idx >= tasks.len() {
+        return ui.page(
+            [
+            ui.navbar("Task Detail"),
+            ui.empty("&#128269;", "Task not found", "Return to the task list."),
+            ui.button("Back", (_ev) => nav.pop(), "secondary"),
+            ]
+        );
+    }
+    let item = tasks[idx];
+    let done = item.has("done") and item["done"] == true;
+    let prio = if item.has("priority") {
+        string(item["priority"])
+    } else {
+        "medium"
+    };
+    let tag = if item.has("tag") {
+        string(item["tag"])
+    } else {
+        "General"
+    };
+    let notes = if item.has("notes") {
+        string(item["notes"])
+    } else {
+        ""
+    };
+
+    let tag_chips = [];
+    for opt in ["General", "Work", "Urgent"] {
+        let choice = opt;
+        tag_chips.push(ui.chip(choice, (_ev) => {
+            let ts = state.get_list("tasks");
+            ts[idx]["tag"] = choice;
+            state.set("tasks", ts);
+            storage.set("tasks", ts);
+        }, tag == choice));
+    }
+
+    return ui.page([ui.navbar("Task Detail"), ui.card([ui.title(string(item["title"])), ui.spacer(6), ui.checkbox(done, (_ev) => {
+        let ts = state.get_list("tasks");
+        ts[idx]["done"] = _ev["value"] == "true";
+        state.set("tasks", ts);
+        storage.set("tasks", ts);
+    }, "Mark completed"), ui.spacer(8), ui.caption("Priority"), ui.spacer(4), ui.select([{
+        "value": "low", "label": "Low priority"
+    }, {
+        "value": "medium", "label": "Medium priority"
+    }, {
+        "value": "high", "label": "High priority"
+    },], prio, (_ev) => {
+        let ts = state.get_list("tasks");
+        ts[idx]["priority"] = string(_ev["value"]);
+        state.set("tasks", ts);
+        storage.set("tasks", ts);
+    }), ui.spacer(10), ui.caption("Category Tag"), ui.spacer(4), ui.row(tag_chips, {
+        "gap": 8, "wrap": true
+    }), ui.spacer(10), ui.caption("Notes"), ui.spacer(4), ui.textarea("Add task notes...", (_ev) => {
+        let ts = state.get_list("tasks");
+        ts[idx]["notes"] = string(_ev["value"]);
+        state.set("tasks", ts);
+        storage.set("tasks", ts);
+    }, notes),]), ui.spacer(12), ui.button("Back to Tasks", (_ev) => nav.pop(), "secondary"),]);
+}

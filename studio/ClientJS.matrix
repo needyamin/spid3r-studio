@@ -1,0 +1,582 @@
+// studio/ClientJS.matrix
+// Minimal client-side runtime injected once into the webview.
+// Handles event delegation, input debouncing with synchronous flush,
+// zero-dependency DOM morphing, focus/caret preservation, route animations,
+// and unified host effects (clipboard, open_url, haptic, async http).
+
+public fn runtime_js() -> string {
+    return r#"(function(){
+  if (window.__studio && window.__studio._installed) { return; }
+
+  var pendingInputs = Object.create(null);
+  var lastPageKey = null;
+  var caretState = null;
+
+  function cssEsc(s) {
+    s = String(s || '');
+    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+      return CSS.escape(s);
+    }
+    return s.replace(/([^\w-])/g, '\\$1');
+  }
+
+  function postUi(payload) {
+    if (window.ipc && typeof window.ipc.postMessage === 'function') {
+      window.ipc.postMessage(JSON.stringify({ event: 'ui', payload: payload }));
+    }
+  }
+
+  function flushInputs() {
+    var sids = Object.keys(pendingInputs);
+    for (var i = 0; i < sids.length; i++) {
+      var sid = sids[i];
+      var entry = pendingInputs[sid];
+      if (!entry) { continue; }
+      clearTimeout(entry.timer);
+      delete pendingInputs[sid];
+      postUi(entry.payload);
+    }
+  }
+
+  function isSafeOpenUrl(u) {
+    return /^https?:\/\/|^mailto:|^tel:/i.test(String(u || '').trim());
+  }
+
+  function isSafeHttpUrl(u) {
+    return /^https?:\/\/|^\//i.test(String(u || '').trim());
+  }
+
+  function captureActive(root) {
+    var ae = document.activeElement;
+    if (!ae || (root && !root.contains(ae))) { return null; }
+    var rec = {
+      el: ae,
+      sid: ae.getAttribute('data-input') || ae.getAttribute('data-change') || '',
+      id: ae.getAttribute('id') || '',
+      tag: ae.tagName,
+      selStart: null,
+      selEnd: null
+    };
+    try {
+      if (typeof ae.selectionStart === 'number') {
+        rec.selStart = ae.selectionStart;
+        rec.selEnd = ae.selectionEnd;
+      }
+    } catch (_e) {}
+    caretState = rec;
+    return rec;
+  }
+
+  function restoreActive(root, rec) {
+    if (!rec) { return; }
+    var target = null;
+    if (rec.el && root.contains(rec.el)) {
+      target = rec.el;
+    } else if (rec.id) {
+      target = root.querySelector('#' + cssEsc(rec.id));
+    } else if (rec.sid) {
+      target = root.querySelector('[data-input="' + cssEsc(rec.sid) + '"],[data-change="' + cssEsc(rec.sid) + '"]');
+    }
+    if (!target) { return; }
+    try {
+      if (document.activeElement !== target && typeof target.focus === 'function') {
+        target.focus({ preventScroll: true });
+      }
+      if (rec.selStart !== null && typeof target.setSelectionRange === 'function') {
+        var len = String(target.value || '').length;
+        var s = Math.min(rec.selStart, len);
+        var e = Math.min(rec.selEnd === null ? s : rec.selEnd, len);
+        target.setSelectionRange(s, e);
+      }
+    } catch (_e2) {}
+  }
+
+  function syncAttrs(oldEl, newEl) {
+    var oldAttrs = oldEl.attributes;
+    for (var i = oldAttrs.length - 1; i >= 0; i--) {
+      var an = oldAttrs[i].name;
+      if (!newEl.hasAttribute(an)) {
+        oldEl.removeAttribute(an);
+      }
+    }
+    var newAttrs = newEl.attributes;
+    for (var j = 0; j < newAttrs.length; j++) {
+      var na = newAttrs[j];
+      if (oldEl.getAttribute(na.name) !== na.value) {
+        oldEl.setAttribute(na.name, na.value);
+      }
+    }
+  }
+
+  function nodeKey(n) {
+    if (!n || n.nodeType !== 1) { return ''; }
+    return n.getAttribute('data-key') || '';
+  }
+
+  function sameType(a, b) {
+    if (!a || !b || a.nodeType !== b.nodeType) { return false; }
+    if (a.nodeType !== 1) { return true; }
+    if (a.tagName !== b.tagName) { return false; }
+    return nodeKey(a) === nodeKey(b);
+  }
+
+  function cloneIntoDoc(n) {
+    if (typeof document.importNode === 'function') {
+      return document.importNode(n, true);
+    }
+    return n.cloneNode(true);
+  }
+
+  function findLookaheadMatch(startNode, targetNode, newKeys, usedSet) {
+    var probe = startNode;
+    var steps = 0;
+    while (probe && steps < 4) {
+      if (!usedSet.has(probe)) {
+        var pk = nodeKey(probe);
+        if (!pk || !newKeys[pk]) {
+          if (sameType(probe, targetNode)) { return probe; }
+        }
+      }
+      probe = probe.nextSibling;
+      steps++;
+    }
+    return null;
+  }
+
+  function morphChildren(oldParent, newParent) {
+    var oldList = Array.prototype.slice.call(oldParent.childNodes);
+    var newList = Array.prototype.slice.call(newParent.childNodes);
+
+    var oldKeyed = Object.create(null);
+    for (var i = 0; i < oldList.length; i++) {
+      var k = nodeKey(oldList[i]);
+      if (k && !oldKeyed[k]) {
+        oldKeyed[k] = oldList[i];
+      }
+    }
+
+    var newKeys = Object.create(null);
+    for (var j = 0; j < newList.length; j++) {
+      var nk = nodeKey(newList[j]);
+      if (nk) { newKeys[nk] = true; }
+    }
+
+    var used = new Set();
+    var curOld = oldParent.firstChild;
+
+    for (var idx = 0; idx < newList.length; idx++) {
+      var nChild = newList[idx];
+      var nKey = nodeKey(nChild);
+      var match = null;
+
+      while (curOld && used.has(curOld)) {
+        curOld = curOld.nextSibling;
+      }
+
+      if (nKey) {
+        if (oldKeyed[nKey] && !used.has(oldKeyed[nKey]) && sameType(oldKeyed[nKey], nChild)) {
+          match = oldKeyed[nKey];
+        }
+      } else {
+        while (curOld && nodeKey(curOld) && newKeys[nodeKey(curOld)]) {
+          curOld = curOld.nextSibling;
+        }
+        if (curOld && !used.has(curOld) && sameType(curOld, nChild)) {
+          match = curOld;
+        } else if (curOld) {
+          match = findLookaheadMatch(curOld.nextSibling, nChild, newKeys, used);
+        }
+      }
+
+      if (match) {
+        used.add(match);
+        if (match === curOld) {
+          curOld = curOld.nextSibling;
+        } else {
+          oldParent.insertBefore(match, curOld);
+        }
+        morphNode(match, nChild);
+      } else {
+        var created = cloneIntoDoc(nChild);
+        used.add(created);
+        oldParent.insertBefore(created, curOld);
+        if (created.nodeType === 1) {
+          if (created.tagName === 'INPUT') {
+            created._studioVal = created.getAttribute('value') || '';
+          } else if (created.tagName === 'TEXTAREA') {
+            created._studioVal = created.textContent || '';
+          }
+        }
+      }
+    }
+
+    var child = oldParent.firstChild;
+    while (child) {
+      var next = child.nextSibling;
+      if (!used.has(child)) {
+        oldParent.removeChild(child);
+      }
+      child = next;
+    }
+  }
+
+  function morphNode(oldNode, newNode) {
+    if (oldNode.nodeType === 3 || oldNode.nodeType === 8) {
+      if (oldNode.nodeValue !== newNode.nodeValue) {
+        oldNode.nodeValue = newNode.nodeValue;
+      }
+      return oldNode;
+    }
+    if (!sameType(oldNode, newNode)) {
+      var rep = cloneIntoDoc(newNode);
+      if (oldNode.parentNode) {
+        oldNode.parentNode.replaceChild(rep, oldNode);
+      }
+      return rep;
+    }
+    var tag = oldNode.tagName;
+    if (tag === 'INPUT') {
+      var inType = (newNode.getAttribute('type') || oldNode.getAttribute('type') || '').toLowerCase();
+      if (inType === 'checkbox' || inType === 'radio') {
+        var shouldChk = newNode.hasAttribute('checked');
+        syncAttrs(oldNode, newNode);
+        if (oldNode.checked !== shouldChk) {
+          oldNode.checked = shouldChk;
+        }
+        return oldNode;
+      }
+      var oldServerVal = (oldNode._studioVal !== undefined) ? oldNode._studioVal : (oldNode.getAttribute('value') || '');
+      var newVal = newNode.getAttribute('value');
+      if (newVal === null) { newVal = ''; }
+      var sid = newNode.getAttribute('data-input') || oldNode.getAttribute('data-input') || '';
+      syncAttrs(oldNode, newNode);
+      oldNode._studioVal = newVal;
+      if (!(sid && pendingInputs[sid])) {
+        var focused = (document.activeElement === oldNode);
+        if (!focused || oldServerVal !== newVal) {
+          if (oldNode.value !== newVal) {
+            oldNode.value = newVal;
+          }
+        }
+      }
+      return oldNode;
+    }
+    if (tag === 'SELECT') {
+      syncAttrs(oldNode, newNode);
+      morphChildren(oldNode, newNode);
+      var opts = oldNode.childNodes || [];
+      var selVal = null;
+      for (var oi = 0; oi < opts.length; oi++) {
+        var o = opts[oi];
+        if (o && o.nodeType === 1 && o.hasAttribute('selected')) {
+          selVal = o.getAttribute('value');
+          break;
+        }
+      }
+      if (selVal !== null && oldNode.value !== selVal) {
+        oldNode.value = selVal;
+      }
+      return oldNode;
+    }
+    if (tag === 'TEXTAREA') {
+      var oldTaServer = (oldNode._studioVal !== undefined) ? oldNode._studioVal : (oldNode.defaultValue || '');
+      var newTaVal = newNode.textContent || '';
+      var sidTa = newNode.getAttribute('data-input') || oldNode.getAttribute('data-input') || '';
+      syncAttrs(oldNode, newNode);
+      oldNode._studioVal = newTaVal;
+      if (!(sidTa && pendingInputs[sidTa])) {
+        var taFocused = (document.activeElement === oldNode);
+        if (!taFocused || oldTaServer !== newTaVal) {
+          if (oldNode.value !== newTaVal) {
+            oldNode.value = newTaVal;
+          }
+        }
+      }
+      return oldNode;
+    }
+    syncAttrs(oldNode, newNode);
+    morphChildren(oldNode, newNode);
+    return oldNode;
+  }
+
+  function parseHtml(html) {
+    var tpl = document.createElement('template');
+    if (tpl && tpl.content) {
+      tpl.innerHTML = String(html || '');
+      return tpl.content;
+    }
+    var box = document.createElement('div');
+    box.innerHTML = String(html || '');
+    return box;
+  }
+
+  function patch(html, targetRoot) {
+    var root = targetRoot || document.getElementById('spid3r-root') || document.body;
+    if (!root) { return; }
+    var activeRec = captureActive(root) || caretState;
+    var incoming = parseHtml(html);
+    if (!incoming) {
+      root.innerHTML = String(html || '');
+      return;
+    }
+    var nextPage = incoming.querySelector ? incoming.querySelector('.page[data-pagekey]') : null;
+    var nextKey = nextPage ? nextPage.getAttribute('data-pagekey') : null;
+    var routeChanged = (lastPageKey !== null && nextKey !== null && nextKey !== lastPageKey);
+
+    morphChildren(root, incoming);
+
+    var curPage = root.querySelector ? root.querySelector('.page[data-pagekey]') : null;
+    if (nextKey !== null) {
+      lastPageKey = nextKey;
+    }
+    if (routeChanged && curPage) {
+      curPage.scrollTop = 0;
+      curPage.classList.add('page-enter');
+      setTimeout(function() {
+        if (curPage && curPage.classList) { curPage.classList.remove('page-enter'); }
+      }, 280);
+    } else if (!routeChanged && activeRec) {
+      restoreActive(root, activeRec);
+    }
+  }
+
+  function copyFallback(text) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (_e) {}
+  }
+
+  function runEffects(effects) {
+    if (!Array.isArray(effects) || effects.length === 0) { return; }
+    for (var i = 0; i < effects.length; i++) {
+      var ef = effects[i];
+      if (!ef || typeof ef !== 'object') { continue; }
+      var kind = String(ef.kind || '');
+
+      if (kind === 'clipboard.copy') {
+        var txt = String(ef.text || '');
+        if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          navigator.clipboard.writeText(txt).catch(function() { copyFallback(txt); });
+        } else {
+          copyFallback(txt);
+        }
+      } else if (kind === 'open_url') {
+        var url = String(ef.url || '');
+        if (isSafeOpenUrl(url) && typeof window.open === 'function') {
+          try { window.open(url, '_blank', 'noopener,noreferrer'); } catch (_e) {}
+        }
+      } else if (kind === 'haptic') {
+        var style = String(ef.style || 'light');
+        var ms = (style === 'heavy') ? 35 : ((style === 'medium') ? 20 : 10);
+        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+          try { navigator.vibrate(ms); } catch (_e2) {}
+        }
+      } else if (kind === 'http') {
+        (function(req) {
+          var reqUrl = String(req.url || '');
+          var cb = String(req.cb || '');
+          if (!isSafeHttpUrl(reqUrl) || !cb || typeof fetch !== 'function') { return; }
+          var method = String(req.method || 'GET').toUpperCase();
+          var opts = { method: method };
+          if (req.headers && typeof req.headers === 'object') {
+            opts.headers = req.headers;
+          }
+          if (method !== 'GET' && method !== 'HEAD' && req.body !== undefined && req.body !== null && req.body !== '') {
+            opts.body = String(req.body);
+          }
+          fetch(reqUrl, opts).then(function(resp) {
+            return resp.text().then(function(bodyText) {
+              var parsed = null;
+              if (bodyText && bodyText.trim() !== '') {
+                try { parsed = JSON.parse(bodyText); } catch (_je) { parsed = null; }
+              }
+              var resObj = {
+                ok: resp.status >= 200 && resp.status < 300,
+                status: resp.status,
+                body: bodyText,
+                json: parsed,
+                error: ''
+              };
+              postUi({
+                sid: cb,
+                kind: 'http',
+                req_id: String(req.req_id || ''),
+                value: bodyText,
+                arg: JSON.stringify(resObj),
+                response: resObj,
+                ok: resObj.ok,
+                status: resObj.status,
+                body: resObj.body,
+                json: resObj.json,
+                error: resObj.error
+              });
+            });
+          }).catch(function(err) {
+            var errObj = {
+              ok: false,
+              status: 0,
+              body: '',
+              json: null,
+              error: (err && err.message) ? err.message : String(err || 'network error')
+            };
+            postUi({
+              sid: cb,
+              kind: 'http',
+              req_id: String(req.req_id || ''),
+              value: '',
+              arg: JSON.stringify(errObj),
+              response: errObj,
+              ok: false,
+              status: 0,
+              body: '',
+              json: null,
+              error: errObj.error
+            });
+          });
+        })(ef);
+      }
+    }
+  }
+
+  document.addEventListener('focusin', function(e) {
+    if (e.target && e.target.nodeType === 1) {
+      captureActive(document.body);
+    }
+  }, true);
+
+  document.addEventListener('click', function(e) {
+    var node = e.target;
+    while (node && node.nodeType === 1) {
+      if (node.hasAttribute('data-tap')) {
+        flushInputs();
+        postUi({
+          sid: node.getAttribute('data-tap'),
+          kind: 'tap',
+          value: node.getAttribute('data-val'),
+          arg: node.getAttribute('data-arg')
+        });
+        return;
+      }
+      if (node.hasAttribute('data-stop-tap')) {
+        return;
+      }
+      node = node.parentNode;
+    }
+  });
+
+  document.addEventListener('input', function(e) {
+    var el = e.target;
+    if (!el || el.nodeType !== 1) { return; }
+    captureActive(document.body);
+    var sid = el.getAttribute('data-input');
+    if (!sid) { return; }
+    if (pendingInputs[sid]) {
+      clearTimeout(pendingInputs[sid].timer);
+    }
+    var payload = {
+      sid: sid,
+      kind: 'input',
+      value: (el.value !== undefined) ? String(el.value) : '',
+      arg: el.getAttribute('data-arg')
+    };
+    var delay = (el.type === 'range') ? 45 : 90;
+    pendingInputs[sid] = {
+      payload: payload,
+      timer: setTimeout(function() {
+        var entry = pendingInputs[sid];
+        delete pendingInputs[sid];
+        if (entry) { postUi(entry.payload); }
+      }, delay)
+    };
+  });
+
+  document.addEventListener('change', function(e) {
+    var el = e.target;
+    if (!el || el.nodeType !== 1 || !el.hasAttribute('data-change')) { return; }
+    flushInputs();
+    postUi({
+      sid: el.getAttribute('data-change'),
+      kind: 'change',
+      value: el.type === 'checkbox' ? (el.checked ? 'true' : 'false') : String(el.value || ''),
+      arg: el.getAttribute('data-arg')
+    });
+  });
+
+  document.addEventListener('submit', function(e) {
+    var f = e.target;
+    if (!f || f.nodeType !== 1 || !f.hasAttribute('data-submit')) { return; }
+    e.preventDefault();
+    flushInputs();
+    postUi({
+      sid: f.getAttribute('data-submit'),
+      kind: 'submit',
+      value: '',
+      arg: f.getAttribute('data-arg')
+    });
+  });
+
+  document.addEventListener('keydown', function(e) {
+    var el = e.target;
+    if (!el || el.nodeType !== 1) { return; }
+    if ((e.key === 'Enter' || e.key === ' ') && el.getAttribute('role') === 'switch' && el.hasAttribute('data-tap')) {
+      e.preventDefault();
+      flushInputs();
+      postUi({
+        sid: el.getAttribute('data-tap'),
+        kind: 'tap',
+        value: el.getAttribute('data-val'),
+        arg: el.getAttribute('data-arg')
+      });
+      return;
+    }
+    if (e.key !== 'Enter' || e.shiftKey) { return; }
+    if (el.hasAttribute('data-submit')) {
+      e.preventDefault();
+      flushInputs();
+      postUi({
+        sid: el.getAttribute('data-submit'),
+        kind: 'submit',
+        value: String(el.value || ''),
+        arg: el.getAttribute('data-arg')
+      });
+      return;
+    }
+    if (el.tagName === 'INPUT') {
+      var cur = el.parentNode;
+      while (cur && cur.nodeType === 1) {
+        if (cur.tagName === 'FORM' && cur.hasAttribute('data-submit')) {
+          e.preventDefault();
+          flushInputs();
+          postUi({
+            sid: cur.getAttribute('data-submit'),
+            kind: 'submit',
+            value: String(el.value || ''),
+            arg: cur.getAttribute('data-arg')
+          });
+          return;
+        }
+        cur = cur.parentNode;
+      }
+    }
+  });
+
+  window.__studio = {
+    _installed: true,
+    patch: patch,
+    morph: patch,
+    runEffects: runEffects,
+    flushInputs: flushInputs,
+    _pendingCount: function() { return Object.keys(pendingInputs).length; }
+  };
+})();"#
+
+    ;
+}

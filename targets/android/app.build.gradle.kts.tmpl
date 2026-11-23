@@ -1,0 +1,31 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "{{PACKAGE_NAME}}"
+    compileSdk = {{ANDROID_TARGET_SDK}}
+
+    defaultConfig {
+        applicationId = "{{BUNDLE_ID}}"
+        minSdk = {{ANDROID_MIN_SDK}}
+        targetSdk = {{ANDROID_TARGET_SDK}}
+        versionCode = {{VERSION_CODE}}
+        versionName = "{{APP_VERSION}}"
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    implementation("androidx.activity:activity:1.8.2")
+    implementation("androidx.webkit:webkit:1.10.0")
+}

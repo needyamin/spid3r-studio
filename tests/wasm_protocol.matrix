@@ -1,0 +1,444 @@
+// tests/wasm_protocol.matrix
+// End-to-end WASM REPL protocol checks + CLI integration smoke tests (new -> check -> upgrade -> build -> dev --once -> clean).
+
+import "tools/FlatKit" as flatkit;
+
+let passed = 0;
+let failed = 0;
+
+fn check_ok(cond: bool, name: string) {
+    if cond {
+        passed += 1;
+    } else {
+        failed += 1;
+        println("FAIL: " + name);
+    }
+}
+
+fn eval_wasm_frame(flat: string, tmp_file: string, env_obj) -> map {
+    let ev_str = "";
+    if env_obj != null {
+        ev_str = json_write(env_obj);
+    }
+    let lit = json_write(ev_str).replace("{", "\\{").replace("}", "\\}");
+    let driver_src = flat.replace(
+        "let STUDIO_EVENT_JSON = \"\";",
+        "let STUDIO_EVENT_JSON = " + lit + ";"
+    );
+    if write_file(tmp_file, driver_src).is_err() {
+        return {
+        };
+    }
+    let r = exec_capture("spid3r", ["run", tmp_file], null);
+    if r.is_err() {
+        return {
+        };
+    }
+    let m = r.unwrap();
+    if int(m["code"]) != 0 {
+        println("wasm_run exit=" + string(m["code"]) + " stderr=" + string(m["stderr"]));
+        return {
+        };
+    }
+    let lines = string(m["stdout"]).split("\n");
+    let i = 0;
+    while i + 1 < lines.len() {
+        if string(lines[i]).trim() == "@@STUDIO_FRAME@@" {
+            try {
+                let parsed = json_parse(string(lines[i + 1]));
+                if type_of(parsed) == "map" {
+                    return parsed;
+                }
+            } catch (_e) {
+                return {
+                };
+            }
+        }
+        i += 1;
+    }
+    return {
+    };
+}
+
+fn cleanup(dirs: list) {
+    for d in dirs {
+        if is_dir(d) {
+            dir_remove(d);
+        }
+    }
+}
+
+fn main() -> int {
+    let wdir = "_test_wasm_proto_tmp";
+    let cdir = "_test_cli_smoke";
+    cleanup([wdir, cdir]);
+
+    dir_create(wdir);
+    let app_src = r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+import "studio/State" as state;
+import "studio/Storage" as storage;
+import "studio/Router" as nav;
+import "studio/Theme" as theme;
+import "studio/Bridge" as br;
+import "studio/Http" as http;
+
+fn do_go(_ev) {
+    state.set("note", "Line1\nLine2 \"quoted\" \{braces}");
+    storage.set("saved", 77);
+    nav.push("Sub", {"id": 9});
+}
+
+fn do_dark(_ev) {
+    theme.mode("dark");
+}
+
+fn do_effects(_ev) {
+    br.copy_text("copied-val");
+    let _u = br.open_url("https://example.com");
+    br.haptic("heavy");
+    let _h = http.get_async("https://api.example.com/v1", "on_v1");
+}
+
+fn on_v1(ev) {
+    if ev["ok"] == true {
+        state.set("api", string(ev["body"]));
+    }
+}
+
+fn Home() -> map {
+    return ui.page([
+        ui.navbar("Home"),
+        ui.text("plat=" + br.platform() + " dark=" + string(br.prefers_dark())),
+        ui.text("saved=" + string(storage.get("saved", 0))),
+        ui.text("api=" + state.get_or("api", "none")),
+        ui.button("Go", "do_go"),
+        ui.button("Dark", "do_dark"),
+        ui.button("Fx", "do_effects"),
+    ]);
+}
+
+fn Sub() -> map {
+    return ui.page([
+        ui.navbar("Sub"),
+        ui.text("sub note=" + state.get_or("note", "")),
+    ]);
+}
+
+public fn studio_app() {
+    return appkit.App("ProtoApp", "sh.test.proto", "1.0.0")
+        .page("Home", Home)
+        .page("Sub", Sub)
+        .handler("do_go", do_go)
+        .handler("do_dark", do_dark)
+        .handler("do_effects", do_effects)
+        .handler("on_v1", on_v1);
+}
+"#
+
+    ;
+    write_file(wdir + "/app.matrix", app_src);
+
+    let flat = flatkit.bundle(wdir);
+    check_ok(flat != "", "flatkit bundles protocol test app");
+    let runner = wdir + "/driver_run.matrix";
+
+    // Frame 1: boot with caps + theme_version=0 -> full CSS + platform capability
+    let f1 = eval_wasm_frame(flat, runner, {
+        "event": null,
+        "router": null,
+        "state": null,
+        "storage": null,
+        "theme": null,
+        "theme_version": 0,
+        "caps": {
+            "platform": "ios", "prefers_dark": true, "viewport_width": 390
+        }
+        ,
+    });
+    check_ok(
+        f1.has("html") and f1.has("css") and string(f1["css"]).len() > 400,
+        "boot frame emits full CSS"
+    );
+    check_ok(
+        f1.has("html") and string(f1["html"]).contains("plat=ios dark=true"),
+        "boot frame receives host caps"
+    );
+    check_ok(
+        f1.has("theme_version") and int(f1["theme_version"]) == 1,
+        "boot frame returns theme_version=1"
+    );
+    if not f1.has("html") {
+        cleanup([wdir, cdir]);
+        return 1;
+    }
+
+    // Frame 2: push route + multiline state + storage -> CSS omitted when theme_version unchanged
+    let f2 = eval_wasm_frame(flat, runner, {
+        "event": {
+            "sid": "do_go", "kind": "tap"
+        }
+        ,
+        "router": f1["router"],
+        "state": f1["state"],
+        "storage": f1["storage"],
+        "theme": f1["theme"],
+        "theme_version": f1["theme_version"],
+        "caps": {
+            "platform": "ios"
+        }
+        ,
+    });
+    check_ok(
+        f2.has("css") and string(f2["css"]) == "",
+        "unchanged theme emits empty css"
+    );
+    check_ok(
+        f2.has("html") and string(f2["html"]).contains("Line1"),
+        "multiline state survives atomic JSON frame"
+    );
+    check_ok(
+        f2.has("router") and string(f2["router"]["stacks"][0].len()) == "2",
+        "router depth becomes 2"
+    );
+    if not f2.has("html") {
+        cleanup([wdir, cdir]);
+        return 1;
+    }
+
+    // Frame 3: hardware back event pops back to Home
+    let f3 = eval_wasm_frame(flat, runner, {
+        "event": {
+            "sid": "__studio_back__", "kind": "back"
+        }
+        ,
+        "router": f2["router"],
+        "state": f2["state"],
+        "storage": f2["storage"],
+        "theme": f2["theme"],
+        "theme_version": f2["theme_version"],
+        "caps": {
+            "platform": "android"
+        }
+        ,
+    });
+    check_ok(
+        f3.has("router") and string(f3["router"]["stacks"][0].len()) == "1",
+        "__studio_back__ pops router stack"
+    );
+    check_ok(
+        f3.has("html") and string(f3["html"]).contains("saved=77"),
+        "storage hydrated across wasm turns"
+    );
+
+    // Frame 4: dark mode toggle bumps theme_version and re-emits CSS
+    let f4 = eval_wasm_frame(flat, runner, {
+        "event": {
+            "sid": "do_dark", "kind": "tap"
+        }
+        ,
+        "router": f3["router"],
+        "state": f3["state"],
+        "storage": f3["storage"],
+        "theme": f3["theme"],
+        "theme_version": f3["theme_version"],
+        "caps": {
+            "platform": "web"
+        }
+        ,
+    });
+    check_ok(int(f4["theme_version"]) == 2, "theme_version increments on mode change");
+    check_ok(string(f4["css"]).contains("#0b0f1a"), "dark CSS emitted on theme change");
+
+    // Frame 5: effects queue emits all 4 unified effects
+    let f5 = eval_wasm_frame(flat, runner, {
+        "event": {
+            "sid": "do_effects", "kind": "tap"
+        }
+        ,
+        "router": f4["router"],
+        "state": f4["state"],
+        "storage": f4["storage"],
+        "theme": f4["theme"],
+        "theme_version": f4["theme_version"],
+        "caps": {
+            "platform": "web"
+        }
+        ,
+    });
+    check_ok(
+        f5.has("effects") and f5["effects"].len() == 4,
+        "frame delivers 4 host effects"
+    );
+
+    // ---------- CLI Integration Smoke: new -> check -> upgrade -> build -> dev --once -> clean ----------
+    dir_create(cdir);
+    let smoke = cdir + "/SmokeApp";
+    let r_new = exec_capture(
+        "spid3r",
+        ["run",
+        "studio.matrix",
+        "new",
+        "SmokeApp",
+        smoke],
+        null
+    );
+    check_ok(
+        r_new.is_ok() and int(r_new.unwrap()["code"]) == 0,
+        "CLI new scaffolds SmokeApp"
+    );
+
+    dir_create(smoke + "/assets");
+    write_file(
+        smoke + "/assets/badge.svg",
+        "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'></svg>"
+    );
+    // Minimal 1x1 PNG header bytes encoded safely via icon.png check (copy valid text/png for manifest path check)
+    write_file(smoke + "/assets/icon.png", "PNG_ICON_PLACEHOLDER");
+    let manifest_json = json_write({
+        "name": "Smoke App",
+        "bundleID": "sh.smoke.app",
+        "version": "1.2.3",
+        "entry": "main.matrix",
+        "icon": "assets/icon.png",
+        "theme": {
+            "mode": "dark", "primary": "#0ea5e9"
+        }
+        ,
+        "android": {
+            "minSdk": 26, "targetSdk": 35, "versionCode": 7
+        }
+        ,
+        "ios": {
+            "deploymentTarget": "16.4"
+        }
+        ,
+    });
+    write_file(smoke + "/studio.json", manifest_json);
+
+    let r_chk = exec_capture("spid3r", ["run", "studio.matrix", "check", smoke], null);
+    check_ok(
+        r_chk.is_ok() and int(r_chk.unwrap()["code"]) == 0,
+        "CLI check passes on SmokeApp"
+    );
+
+    let r_upg = exec_capture("spid3r", ["run", "studio.matrix", "upgrade", smoke], null);
+    check_ok(
+        r_upg.is_ok() and int(r_upg.unwrap()["code"]) == 0,
+        "CLI upgrade refreshes vendor/studio"
+    );
+
+    let r_web = exec_capture(
+        "spid3r",
+        ["run",
+        "studio.matrix",
+        "build",
+        smoke,
+        "--target",
+        "web"],
+        null
+    );
+    check_ok(
+        r_web.is_ok() and int(r_web.unwrap()["code"]) == 0,
+        "CLI build --target web ok"
+    );
+    check_ok(file_exists(smoke + "/build/web/assets/badge.svg"), "web build copies assets/");
+    check_ok(file_exists(smoke + "/build/web/wasmworker.js"), "web build includes wasmworker.js");
+    check_ok(file_exists(smoke + "/build/web/manifest.json"), "web build emits manifest.json");
+    check_ok(file_exists(smoke + "/build/web/sw.js"), "web build emits sw.js");
+    let mf_r = read_file(smoke + "/build/web/manifest.json");
+    check_ok(
+        mf_r.is_ok() and string(mf_r.unwrap()).contains("\"display\":\"standalone\""),
+        "web manifest.json sets standalone display"
+    );
+    let web_idx = read_file(smoke + "/build/web/index.html");
+    let web_idx_s = if web_idx.is_ok() {
+        string(web_idx.unwrap())
+    } else {
+        ""
+    };
+    check_ok(
+        web_idx_s.contains("\"primary\":\"#0ea5e9\"") and web_idx_s.contains("apple-mobile-web-app-capable") and web_idx_s.contains("rel=\"manifest\""),
+        "web index.html embeds manifest theme and PWA meta tags"
+    );
+
+    let r_and = exec_capture(
+        "spid3r",
+        ["run",
+        "studio.matrix",
+        "build",
+        smoke,
+        "--target",
+        "android"],
+        null
+    );
+    check_ok(
+        r_and.is_ok() and int(r_and.unwrap()["code"]) == 0,
+        "CLI build --target android ok"
+    );
+    check_ok(
+        file_exists(smoke + "/build/android/AndroidApp/app/src/main/assets/assets/badge.svg"),
+        "android copies assets/"
+    );
+    let ag = read_file(smoke + "/build/android/AndroidApp/app/build.gradle.kts");
+    check_ok(
+        ag.is_ok() and string(ag.unwrap()).contains("minSdk = 26") and string(ag.unwrap()).contains("targetSdk = 35"),
+        "android gradle uses manifest SDK versions"
+    );
+
+    let r_ios = exec_capture(
+        "spid3r",
+        ["run",
+        "studio.matrix",
+        "build",
+        smoke,
+        "--target",
+        "ios"],
+        null
+    );
+    check_ok(
+        r_ios.is_ok() and int(r_ios.unwrap()["code"]) == 0,
+        "CLI build --target ios ok"
+    );
+    let ps = read_file(smoke + "/build/ios/SmokeApp/Package.swift");
+    check_ok(
+        ps.is_ok() and string(ps.unwrap()).contains(".iOS(.v16)"),
+        "ios Package.swift uses deploymentTarget"
+    );
+    let xt = read_file(smoke + "/build/ios/SmokeApp/xtool.yml");
+    check_ok(
+        xt.is_ok() and string(xt.unwrap()).contains("iconPath: icon.png"),
+        "ios xtool.yml sets iconPath"
+    );
+    check_ok(
+        file_exists(smoke + "/build/ios/SmokeApp/Sources/SmokeApp/Resources/app/assets/badge.svg"),
+        "ios copies assets/"
+    );
+
+    let r_dev = exec_capture(
+        "spid3r",
+        ["run",
+        "studio.matrix",
+        "dev",
+        smoke,
+        "--target",
+        "web",
+        "--once"],
+        null
+    );
+    check_ok(
+        r_dev.is_ok() and int(r_dev.unwrap()["code"]) == 0,
+        "CLI dev --target web --once ok"
+    );
+
+    let r_cln = exec_capture("spid3r", ["run", "studio.matrix", "clean", smoke], null);
+    check_ok(r_cln.is_ok() and int(r_cln.unwrap()["code"]) == 0, "CLI clean ok");
+    check_ok(not is_dir(smoke + "/build"), "CLI clean removes build dir");
+
+    cleanup([wdir, cdir]);
+    println("wasm_protocol passed: " + string(passed) + "  failed: " + string(failed));
+    if failed > 0 {
+        return 1;
+    }
+    return 0;
+}

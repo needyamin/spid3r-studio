@@ -1,0 +1,413 @@
+// studio/App.matrix
+// The AppStudio application object: pages, handlers, tabs, storage, boot sequence.
+//
+// Native (desktop/dev) mode — entry file main.matrix:
+//   let app = studio_app();
+//   app.bridge(studio_title, studio_html, studio_eval, studio_on, studio_emit);
+//   return app.run();
+//
+// Wasm (web/Android/iOS) mode — AppStudio hosts eval `app source + driver`:
+//   driver:  let STUDIO_EVENT_JSON = "<injected>";
+//            fn main() -> int { return studio_app().wasm_run(STUDIO_EVENT_JSON); }
+// The program answers with @@STUDIO_*@@ protocol lines on stdout; the host
+// re-evaluates the whole app source for every UI event (stateless REPL).
+
+import "Bridge" as br;
+import "State" as state;
+import "Router" as nav;
+import "Render" as render;
+import "CSS" as css;
+import "Storage" as storage;
+import "ClientJS" as client;
+import "Theme" as theme;
+import "Util" as U;
+
+fn build_error_html(heading: string, detail: string) -> string {
+    br.clear_slots();
+    let h = "<div class=\"page\"><div class=\"card\" style=\"gap:10px;\">"
+    + "<div class=\"title\" style=\"color:var(--danger)\">" + U.esc(heading) + "</div>"
+    + "<div class=\"mono\">" + U.esc(detail) + "</div>"
+    + "<div class=\"row\" style=\"gap:8px;margin-top:6px;\">";
+    if nav.can_pop() {
+        h += "<button class=\"btn secondary\" data-tap=\"" + br.slot((_ev) => nav.pop()) + "\">Go Back</button>";
+    }
+    h += "<button class=\"btn primary\" data-tap=\"" + br.slot((_ev) => {
+    }) + "\">Reload</button>";
+    h += "</div></div></div>";
+    return h;
+}
+
+// Mounted-instance registry so plain handler functions can reach the running app:
+//   App.current().restyle();
+let current_app = null;
+
+public fn mount(a) {
+    current_app = a;
+}
+
+public fn current() -> App {
+    return current_app;
+}
+
+/// Re-inject CSS + re-render from anywhere (wasm-safe, alias-friendly):
+///   appkit.refresh_theme();
+public fn refresh_theme() {
+    let a = current();
+    if a != null {
+        a.restyle();
+    }
+}
+
+fn is_dry_run_mode() -> bool {
+    let d = env("STUDIO_DRY_RUN");
+    if string(d) != "none" {
+        let sv = string(d.unwrap()).trim().lower();
+        if sv == "1" or sv == "true" {
+            return true;
+        }
+    }
+    for a in args() {
+        let sa = string(a);
+        if sa == "--dry-run" or sa == "dry-run" or sa == "--once" or sa == "once" {
+            return true;
+        }
+    }
+    return false;
+}
+
+public class App {
+    public let app_name;
+    public let bundle_id;
+    public let version;
+    private let pages;
+    private let handlers;
+    private let tab_defs;
+    private let root_page;
+    private let data_dir_path;
+    private let boot_fn;
+    private let in_wasm;
+    private let rendered_in_dispatch;
+    private let client_ready;
+
+    fn new (n: string, bid: string = "", ver: string = "1.0.0") {
+        self.app_name = n;
+        self.bundle_id = bid;
+        self.version = ver;
+        self.pages = {
+        };
+        self.handlers = {
+        };
+        self.tab_defs = [];
+        self.root_page = "";
+        self.data_dir_path = "storage";
+        self.boot_fn = null;
+        self.in_wasm = false;
+        self.rendered_in_dispatch = false;
+        self.client_ready = false;
+    }
+
+    /// Register a page renderer: fn() -> component node (usually ui.page([...])).
+    /// The first registered page is the root unless tab_pages() is used.
+    public fn page(self, name: string, f) -> App {
+        self.pages[name] = f;
+        if self.root_page == "" {
+            self.root_page = name;
+        }
+        return self;
+    }
+
+    /// Register a named event handler: fn(ev: map). Referenced by name in components.
+    public fn handler(self, name: string, f) -> App {
+        self.handlers[name] = f;
+        return self;
+    }
+
+    /// Bottom tab bar. Entries: page names, or {"label","icon"} maps
+    /// whose "label" is the page name.
+    public fn tab_pages(self, tabs: list) -> App {
+        self.tab_defs = tabs;
+        return self;
+    }
+
+    /// Directory for Storage (default "./storage").
+    public fn data_dir(self, d: string) -> App {
+        self.data_dir_path = d;
+        return self;
+    }
+
+    /// Boot function: called before the first render (seed storage, load data).
+    public fn boot(self, f) -> App {
+        self.boot_fn = f;
+        return self;
+    }
+
+    /// REQUIRED for native (desktop/dev) mode: install the entry-file GUI shims.
+    /// gui_* natives only link inside the entry file. `studio new` generates them:
+    ///
+    ///   fn studio_title(t: string) { gui_title(t); }
+    ///   fn studio_html(h: string) { gui_set_html(h); }
+    ///   fn studio_eval(js: string) { gui_eval(js); }
+    ///   fn studio_on(n: string, cb) { gui_on(n, cb); }
+    ///   fn studio_emit(n: string, p: string) { gui_emit(n, p); }
+    public fn bridge(self, f_title, f_html, f_eval, f_on, f_emit) -> App {
+        br.install(f_title, f_html, f_eval, f_on, f_emit);
+        return self;
+    }
+
+    /// Shared boot: handler registry, router, storage, mounted instance.
+    public fn prepare(self, is_wasm: bool = false) {
+        self.in_wasm = is_wasm;
+        if is_wasm {
+            br.set_host_caps({
+                "platform": "web"
+            });
+        } else {
+            br.set_host_caps({
+                "platform": "native"
+            });
+        }
+        br.drain_effects();
+        for (hname, f) in self.handlers {
+            br.named_handler(hname, f);
+        }
+        if self.tab_defs.len() > 0 {
+            nav.configure(self.tab_defs);
+        } else {
+            nav.configure_single(self.root_page);
+        }
+        storage.set_memory_only(is_wasm);
+        storage.configure(self.data_dir_path);
+        mount(self);
+    }
+
+    /// HTML for the current route (page + chrome).
+    private fn page_html(self) -> string {
+        let pname = nav.page_name();
+        if not self.pages.has(pname) {
+            return "<div class=\"page\"><h2>Page not found</h2><p class=\"muted\">No page registered as '"
+            + U.esc(pname) + "'. Registered: " + U.esc(string(self.pages.keys())) + "</p></div>";
+        }
+        let f = self.pages[pname];
+        let node = null;
+        try {
+            node = f();
+        } catch (e) {
+            return build_error_html("Page '" + pname + "' failed", string(e));
+        }
+        if node == null or type_of(node) != "map" {
+            return "<div class=\"page\"><h2>Page error</h2><p class=\"muted\">Page '" + U.esc(pname) + "' did not return a component node.</p></div>";
+        }
+        try {
+            if not node.has("el") or string(node["el"]) != "page" {
+                let wrap = {
+                    "el": "page", "pagekey": pname, "children": [node]
+                };
+                return render.document(wrap, nav.tabs(), nav.tab_index());
+            }
+            node["pagekey"] = pname;
+            return render.document(node, nav.tabs(), nav.tab_index());
+        } catch (e) {
+            return build_error_html("Render failed on '" + pname + "'", string(e));
+        }
+    }
+
+    private fn flush_native_effects(self) {
+        if self.in_wasm or not self.client_ready {
+            return;
+        }
+        let efs = br.drain_effects();
+        if efs.len() > 0 {
+            br.eval(
+                r#"(function(e){if(window.__studio&&window.__studio.runEffects){window.__studio.runEffects(e);}})("#
+                + json_write(efs) + ");"
+            );
+        }
+    }
+
+    /// Render the current route into the webview (native mode).
+    public fn render(self) {
+        br.clear_slots();
+        let html = self.page_html();
+        if not self.in_wasm and self.client_ready {
+            br.eval(
+                r#"(function(h){if(window.__studio&&window.__studio.patch){window.__studio.patch(h);}else{var r=document.getElementById('spid3r-root')||document.body;if(r){r.innerHTML=h;}}})("#
+                + json_write(html) + ");"
+            );
+        } else {
+            br.set_html(html);
+        }
+        self.flush_native_effects();
+        self.rendered_in_dispatch = true;
+    }
+
+    /// Re-inject the stylesheet (after Theme changes) and re-render.
+    public fn restyle(self) {
+        if self.in_wasm {
+            return;
+        }
+        let css_json = json_write(css.stylesheet());
+        br.eval(
+            "(function(){var css=" + css_json
+            + ";var el=document.querySelector('style[data-studio]');if(el){el.textContent=css;}"
+            + "else{var s=document.createElement('style');s.setAttribute('data-studio','1');s.textContent=css;document.head.appendChild(s);}})();"
+        );
+        self.render();
+    }
+
+    /// Boot the app in the native webview and run until the window closes.
+    public fn run(self) -> int {
+        self.prepare();
+        br.set_title(self.app_name);
+        br.eval(
+            "(function(){var s=document.createElement('style');s.setAttribute('data-studio','1');s.textContent="
+            + json_write(css.stylesheet()) + ";document.head.appendChild(s);})();"
+        );
+        br.eval(client.runtime_js());
+        self.client_ready = true;
+        if self.boot_fn != null {
+            let bf = self.boot_fn;
+            bf();
+        }
+        self.render();
+
+        br.on("ui", (ev) => {
+            self.rendered_in_dispatch = false;
+            let err = br.dispatch_safe(ev);
+            if err != "" {
+                br.set_html(build_error_html("Handler error", err));
+                return;
+            }
+            if not self.rendered_in_dispatch {
+                try {
+                    self.render();
+                } catch (e) {
+                    br.set_html(build_error_html("Render error", string(e)));
+                }
+            }
+        });
+
+        if is_dry_run_mode() {
+            return 0;
+        }
+
+        // Hold the process open so the webview keeps talking to us.
+        // Escape hatches: window close (shutdown_requested), a .studio-stop
+        // flag (tooling/CI), or .studio-reload (studio dev hot reload).
+        while not shutdown_requested() {
+            sleep_ms(150);
+            if file_exists(".studio-stop") or file_exists(".studio-reload") {
+                // ask the gui runner to terminate this app cleanly
+                request_shutdown();
+                break;
+            }
+        }
+        return 0;
+    }
+
+    /// Wasm/mobile REPL mode: restore, boot, dispatch one event, render, and
+    /// answer with an atomic @@STUDIO_FRAME@@ JSON line on stdout.
+    public fn wasm_run(self, ev_json: string) -> int {
+        self.prepare(true);
+        let had_event = false;
+        let err_title = "";
+        let err_msg = "";
+        let client_tv = 0;
+        if ev_json != "" {
+            let env = null;
+            try {
+                env = json_parse(ev_json);
+            } catch (_e) {
+                env = null;
+            }
+            if env != null and type_of(env) == "map" {
+                if env.has("caps") and type_of(env["caps"]) == "map" {
+                    br.set_host_caps(env["caps"]);
+                }
+                if env.has("router") and type_of(env["router"]) == "map" {
+                    nav.restore(env["router"]);
+                }
+                if env.has("state") and type_of(env["state"]) == "map" {
+                    state.restore(env["state"]);
+                }
+                if env.has("storage") and type_of(env["storage"]) == "map" {
+                    storage.hydrate(env["storage"]);
+                }
+                if env.has("theme") and type_of(env["theme"]) == "map" {
+                    theme.restore(env["theme"]);
+                }
+                if env.has("theme_version") and env["theme_version"] != null {
+                    let tv = U.ival(env, "theme_version", 0);
+                    if tv > 0 {
+                        client_tv = tv;
+                        theme.set_version(tv);
+                    }
+                }
+                if env.has("event") and type_of(env["event"]) == "map" and env["event"].has("sid") {
+                    let sid = string(env["event"]["sid"]);
+                    if sid == "__studio_back__" {
+                        if nav.can_pop() {
+                            nav.pop();
+                        }
+                        had_event = true;
+                    } elif sid != "" {
+                        if not br.has_named(sid) {
+                            try {
+                                self.render();
+                            } catch (_re) {
+                                let _ = _re;
+                            }
+                        }
+                        let h = br.lookup(sid);
+                        if h != null {
+                            try {
+                                h(env["event"]);
+                            } catch (e) {
+                                err_title = "Handler '" + sid + "' failed";
+                                err_msg = string(e);
+                            }
+                        }
+                        had_event = true;
+                    }
+                }
+            }
+        }
+        if not had_event and err_msg == "" and self.boot_fn != null {
+            try {
+                let bf = self.boot_fn;
+                bf();
+            } catch (e) {
+                err_title = "Boot failed";
+                err_msg = string(e);
+            }
+        }
+        let html = "";
+        let effects = [];
+        if err_msg != "" {
+            br.drain_effects();
+            html = build_error_html(err_title, err_msg);
+        } else {
+            br.clear_slots();
+            html = self.page_html();
+            effects = br.drain_effects();
+        }
+        let cur_tv = theme.version();
+        let emit_css = "";
+        if client_tv == 0 or cur_tv != client_tv {
+            emit_css = css.stylesheet();
+        }
+        let frame = {
+            "css": emit_css,
+            "theme_version": cur_tv,
+            "html": html,
+            "title": self.app_name,
+            "router": nav.snapshot(),
+            "state": state.snapshot(),
+            "storage": storage.all(),
+            "theme": theme.snapshot(),
+            "effects": effects,
+        };
+        println("@@STUDIO_FRAME@@");
+        println(json_write(frame));
+        return 0;
+    }
+}

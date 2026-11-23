@@ -1,0 +1,212 @@
+// cli/RunDev.matrix
+// Native preview (run), hot-reload watcher (dev), and static checker (check).
+
+import "Fs" as fs;
+import "Manifest" as man;
+import "Exec" as ex;
+
+public fn cmd_run(appdir: string) -> int {
+    let entry = man.find_entry(appdir);
+    if entry == "" {
+        println(
+            "error: no app entry found in " + appdir + " (expected app.matrix or studio.json entry)"
+        );
+        return 2;
+    }
+    fs.setup_import_path();
+    let host = fs.host_page(appdir);
+    println("running " + entry + "  (close the window to exit)");
+    let r = exec_capture("spid3r", ["gui", entry, "--html", host], null);
+    if r.is_err() {
+        println("error: failed to launch gui: " + string(r.unwrap_err()));
+        return 1;
+    }
+    let m = r.unwrap();
+    ex.flush_child_output(m);
+    return int(m["code"]);
+}
+
+fn pid_set() -> list {
+    let pids = [];
+    if fs.is_windows() {
+        let out = exec_capture(
+            "tasklist",
+            ["/FI",
+            "IMAGENAME eq spid3r.exe",
+            "/FO",
+            "CSV",
+            "/NH"],
+            null
+        );
+        if out.is_err() {
+            return pids;
+        }
+        for row in string(out.unwrap()["stdout"]).split("\n") {
+            let t = string(row).trim();
+            if t == "" or not t.contains("spid3r") {
+                continue;
+            }
+            let q1 = fs.str_find_from(t, "\",\"", 0) + 3;
+            let q2 = fs.str_find_from(t, "\"", q1);
+            if q1 > 2 and q2 > q1 {
+                pids.push(t.slice(q1, q2).trim());
+            }
+        }
+        return pids;
+    }
+    let p_out = exec_capture("pgrep", ["-x", "spid3r"], null);
+    if p_out.is_ok() and int(p_out.unwrap()["code"]) == 0 {
+        for row in string(p_out.unwrap()["stdout"]).split("\n") {
+            let t = string(row).trim();
+            if t != "" {
+                pids.push(t);
+            }
+        }
+        return pids;
+    }
+    let ps_out = exec_capture("ps", ["-eo", "pid,comm"], null);
+    if ps_out.is_ok() {
+        for row in string(ps_out.unwrap()["stdout"]).split("\n") {
+            let t = string(row).trim();
+            if t.ends_with("spid3r") {
+                let parts = t.split(" ");
+                if parts.len() > 0 and string(parts[0]).trim() != "" {
+                    pids.push(string(parts[0]).trim());
+                }
+            }
+        }
+    }
+    return pids;
+}
+
+fn kill_pid(pid: string) {
+    if pid == "" {
+        return;
+    }
+    if fs.is_windows() {
+        exec_capture("taskkill", ["/F", "/PID", pid, "/T"], null);
+        return;
+    }
+    let r = exec_capture("kill", ["-TERM", pid], null);
+    if r.is_err() or int(r.unwrap()["code"]) != 0 {
+        exec_capture("kill", ["-9", pid], null);
+    }
+}
+
+fn list_contains(xs: list, v: string) -> bool {
+    for x in xs {
+        if string(x) == v {
+            return true;
+        }
+    }
+    return false;
+}
+
+public fn cmd_dev(appdir: string) -> int {
+    let entry = man.find_entry(appdir);
+    if entry == "" {
+        println("error: no app entry found in " + appdir);
+        return 2;
+    }
+    fs.setup_import_path();
+    let host = fs.host_page(appdir);
+    let clean_dir = fs.trim_slash(appdir);
+    let done_flag = fs.join_dir(clean_dir, ".studio-dev-done");
+    let reload_flag = ".studio-reload";
+    println(
+        "dev mode: watching " + clean_dir + "  (save a file to hot-reload; close the app window to exit)"
+    );
+
+    let generations = 0;
+    let sig0 = "";
+    while true {
+        if file_exists(done_flag) {
+            remove_file(done_flag);
+        }
+        if file_exists(reload_flag) {
+            remove_file(reload_flag);
+        }
+        sig0 = fs.source_signature(clean_dir);
+        let before = pid_set();
+        spawn fn() {
+            let app_pid = "";
+            let tries = 0;
+            while tries < 30 and app_pid == "" {
+                if file_exists(done_flag) {
+                    return;
+                }
+                sleep_ms(150);
+                let found = pid_set();
+                for p in found {
+                    if not list_contains(before, string(p)) {
+                        app_pid = string(p);
+                        break;
+                    }
+                }
+                tries += 1;
+            }
+            if app_pid == "" {
+                return;
+            }
+            let last = fs.source_signature(clean_dir);
+            while not file_exists(done_flag) {
+                sleep_ms(400);
+                if file_exists(done_flag) {
+                    return;
+                }
+                let cur = fs.source_signature(clean_dir);
+                if cur != last {
+                    write_file(reload_flag, "1");
+                    sleep_ms(200);
+                    kill_pid(app_pid);
+                    return;
+                }
+            }
+        };
+        let r = exec_capture("spid3r", ["gui", entry, "--html", host], null);
+        write_file(done_flag, "1");
+        sleep_ms(450);
+        if file_exists(done_flag) {
+            remove_file(done_flag);
+        }
+        if file_exists(reload_flag) {
+            remove_file(reload_flag);
+        }
+        if r.is_err() {
+            println("error: failed to launch gui: " + string(r.unwrap_err()));
+            return 1;
+        }
+        let m = r.unwrap();
+        ex.flush_child_output(m);
+        generations += 1;
+        let now_sig = fs.source_signature(clean_dir);
+        if now_sig != sig0 {
+            println("change detected — reloading app...");
+            continue;
+        }
+        println("dev session ended (" + string(generations) + " runs).");
+        return 0;
+    }
+    return 0;
+}
+
+public fn cmd_check(appdir: string) -> int {
+    let entry = man.find_entry(appdir);
+    if entry == "" {
+        println("error: no app entry found in " + appdir);
+        return 2;
+    }
+    fs.setup_import_path();
+    let r = exec_capture("spid3r", ["check", entry], null);
+    if r.is_err() {
+        println("error: " + string(r.unwrap_err()));
+        return 1;
+    }
+    let m = r.unwrap();
+    ex.flush_child_output(m);
+    let code = int(m["code"]);
+    if code == 0 {
+        println("check ok: " + entry);
+    }
+    return code;
+}

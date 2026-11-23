@@ -1,0 +1,378 @@
+// studio/Components.matrix
+// AppStudio declarative UI primitives.
+// Every helper returns a plain map node: {"el": ..., ...props, "children": [...]}.
+// Event props ("onTap", "onInput", "onChange", "onSubmit") accept a handler NAME (string,
+// registered on the app) or a first-class spid3r function (auto slot).
+
+fn merge_props(base: map, extra: map) -> map {
+    let out = {
+    };
+    for (k, v) in base {
+        out[k] = v;
+    }
+    if extra != null and type_of(extra) == "map" {
+        for (k, v) in extra {
+            out[k] = v;
+        }
+    }
+    return out;
+}
+
+// ---------- structural ----------
+
+/// Page root: a vertically scrolling, safe-area aware surface.
+public fn page(children: list) -> map {
+    return {
+        "el": "page", "children": children
+    };
+}
+
+/// Generic escape hatch: any element with props + children.
+public fn node(el: string, props: map, children: list = []) -> map {
+    let n = {
+        "el": el
+    };
+    if props != null and type_of(props) == "map" {
+        for (k, v) in props {
+            n[k] = v;
+        }
+    }
+    n["children"] = children;
+    return n;
+}
+
+/// Vertical stack. props: gap, align, justify, pad, wrap, cls, style, onTap
+public fn column(children: list, props: map = {
+}) -> map {
+    return node("column", props, children);
+}
+
+/// Horizontal stack. Same props as column.
+public fn row(children: list, props: map = {
+}) -> map {
+    return node("row", props, children);
+}
+
+/// Responsive CSS grid container.
+public fn grid(children: list, cols: int = 2, gap: int = 10, props: map = {
+}) -> map {
+    return node("grid", merge_props({
+        "cols": cols, "gap": gap
+    }, props), children);
+}
+
+/// Scrollable container (use inside a fixed-height region).
+public fn scroll(children: list, props: map = {
+}) -> map {
+    return node("scroll", props, children);
+}
+
+/// Center children both axes.
+public fn center(children: list, props: map = {
+}) -> map {
+    return node("center", merge_props({
+        "align": "center", "justify": "center"
+    }, props), children);
+}
+
+/// Empty gap. size in px (default 8); 0 expands as a flex spacer.
+public fn spacer(size: int = 8) -> map {
+    return node("spacer", {
+        "size": size
+    }, []);
+}
+
+/// Flexible spacer that fills remaining space in a row or column.
+public fn flex_spacer() -> map {
+    return node("spacer", {
+        "size": 0, "flex": 1
+    }, []);
+}
+
+/// Horizontal rule.
+public fn divider() -> map {
+    return node("divider", {
+    }, []);
+}
+
+// ---------- text ----------
+
+/// Text. style: h1 | h2 | h3 | title | subtitle | body | caption | muted | mono | bold
+public fn text(t: string, style: string = "body") -> map {
+    return node("text", {
+        "text": t, "cls": style
+    }, []);
+}
+
+public fn title(t: string) -> map {
+    return text(t, "title");
+}
+
+public fn subtitle(t: string) -> map {
+    return text(t, "subtitle");
+}
+
+public fn caption(t: string) -> map {
+    return text(t, "caption");
+}
+
+// ---------- top chrome ----------
+
+/// Top app bar. actions: list of nodes (usually iconbutton).
+public fn navbar(t: string, actions: list = []) -> map {
+    return node("navbar", {
+        "title": t
+    }, actions);
+}
+
+/// Bottom tab bar. tabs: list of {"label": ..., "icon": ...}; active = index.
+public fn tabbar(tabs: list, active: int) -> map {
+    return node("tabbar", {
+        "tabs": tabs, "active": active
+    }, []);
+}
+
+// ---------- buttons ----------
+
+/// Tappable button. onTap = handler name or function. variant: primary | secondary | danger | ghost | outline
+public fn button(label: string, onTap, variant: string = "primary", props: map = {
+}) -> map {
+    return node("button", merge_props({
+        "text": label, "onTap": onTap, "variant": variant
+    }, props), []);
+}
+
+public fn iconbutton(icon: string, onTap, variant: string = "ghost", props: map = {
+}) -> map {
+    return node("iconbutton", merge_props({
+        "icon": icon, "onTap": onTap, "variant": variant
+    }, props), []);
+}
+
+/// Floating action button (rendered bottom-right of the page).
+public fn fab(icon: string, onTap, props: map = {
+}) -> map {
+    return node("fab", merge_props({
+        "icon": icon, "onTap": onTap
+    }, props), []);
+}
+
+/// Compact tag / filter chip (interactive when onTap is non-null).
+public fn chip(label: string, onTap = null, selected: bool = false, props: map = {
+}) -> map {
+    return node("chip", merge_props({
+        "text": label, "onTap": onTap, "selected": selected
+    }, props), []);
+}
+
+// ---------- inputs ----------
+
+/// Form container handling Enter submission via onSubmit.
+public fn form(children: list, onSubmit, props: map = {
+}) -> map {
+    return node("form", merge_props({
+        "onSubmit": onSubmit
+    }, props), children);
+}
+
+/// Single-line input. kind: text | email | password | number | search
+public fn input(placeholder: string, onInput, value: string = "", kind: string = "text", props: map = {
+}) -> map {
+    return node("input", merge_props({
+        "placeholder": placeholder, "value": value, "onInput": onInput, "kind": kind
+    }, props), []);
+}
+
+/// Multiline input.
+public fn textarea(placeholder: string, onInput, value: string = "", props: map = {
+}) -> map {
+    return node("textarea", merge_props({
+        "placeholder": placeholder, "value": value, "onInput": onInput
+    }, props), []);
+}
+
+/// Checkbox with optional label. onChange receives value "true" | "false".
+public fn checkbox(checked: bool, onChange, label: string = "", props: map = {
+}) -> map {
+    return node("checkbox", merge_props({
+        "value": checked, "onChange": onChange, "label": label
+    }, props), []);
+}
+
+/// Dropdown selector. options: list of strings or {"label","value"} maps.
+public fn select(options: list, value: string, onChange, props: map = {
+}) -> map {
+    return node("select", merge_props({
+        "options": options, "value": value, "onChange": onChange
+    }, props), []);
+}
+
+/// Alias for select().
+public fn picker(options: list, value: string, onChange, props: map = {
+}) -> map {
+    return select(options, value, onChange, props);
+}
+
+/// Segmented control tabs. onChange receives selected option value/index.
+public fn segmented(options: list, active: int, onChange, props: map = {
+}) -> map {
+    return node("segmented", merge_props({
+        "options": options, "active": active, "onChange": onChange
+    }, props), []);
+}
+
+/// Toggle switch. value = bool; onTap receives ev["value"] ("true"/"false") and ev["arg"] ("1"/"0").
+public fn toggle(value: bool, onTap, props: map = {
+}) -> map {
+    return node("toggle", merge_props({
+        "value": value, "onTap": onTap
+    }, props), []);
+}
+
+/// Linear progress. value 0.0..1.0
+public fn progress(value: float) -> map {
+    return node("progress", {
+        "value": value
+    }, []);
+}
+
+/// Circular loading indicator.
+public fn spinner(size: int = 24, label: string = "Loading", props: map = {
+}) -> map {
+    return node("spinner", merge_props({
+        "size": size, "label": label
+    }, props), []);
+}
+
+/// Slider. onInput receives the new value as string.
+public fn slider(value: float, minv: float, maxv: float, onInput, props: map = {
+}) -> map {
+    return node("slider", merge_props({
+        "value": value, "min": minv, "max": maxv, "onInput": onInput
+    }, props), []);
+}
+
+// ---------- media & decoration ----------
+
+public fn image(src: string, props: map = {
+}) -> map {
+    return node("image", merge_props({
+        "src": src, "alt": ""
+    }, props), []);
+}
+
+/// Circular avatar: image src, or initials label when src is "".
+public fn avatar(src: string = "", label: string = "") -> map {
+    return node("avatar", {
+        "src": src, "label": label
+    }, []);
+}
+
+/// Small pill. color: primary | success | danger | accent
+public fn badge(t: string, color: string = "primary") -> map {
+    return node("badge", {
+        "text": t, "color": color
+    }, []);
+}
+
+// ---------- containers & overlays ----------
+
+/// Elevated rounded card.
+public fn card(children: list, props: map = {
+}) -> map {
+    return node("card", props, children);
+}
+
+/// Convenience: card with title + body text.
+public fn card_text(t: string, body: string) -> map {
+    return card([text(t, "title"), spacer(4), text(body, "muted"),], {
+    });
+}
+
+/// Tappable list row. leading/trailing are optional nodes.
+public fn listtile(
+    t: string,
+    subtitle: string = "",
+    onTap = null,
+    leading = null,
+    trailing = null
+) -> map {
+    let p = {
+        "title": t, "subtitle": subtitle, "onTap": onTap
+    };
+    if leading != null {
+        p["leading"] = leading;
+    }
+    if trailing != null {
+        p["trailing"] = trailing;
+    }
+    return node("listtile", p, []);
+}
+
+/// Data list. renderItem(item, index) -> node; when omitted, items that are maps
+/// render as listtiles (using "title"/"subtitle" keys), strings render as tiles too.
+public fn list(items: list, renderItem = null, props: map = {
+}) -> map {
+    return node("list", merge_props({
+        "items": items, "renderItem": renderItem
+    }, props), []);
+}
+
+/// Bottom sheet / modal overlay.
+public fn sheet(children: list, props: map = {
+}) -> map {
+    return node("sheet", props, children);
+}
+
+/// Modal dialog with title, body, and action buttons.
+public fn dialog(title: string, body: string, actions: list = [], onDismiss = null, props: map = {
+}) -> map {
+    return node("dialog", merge_props({
+        "title": title, "body": body, "onDismiss": onDismiss
+    }, props), actions);
+}
+
+/// Two-button confirmation modal dialog.
+public fn confirm(
+    title: string,
+    body: string,
+    onConfirm,
+    onCancel,
+    confirm_label: string = "Confirm",
+    cancel_label: string = "Cancel"
+) -> map {
+    return dialog(
+        title,
+        body,
+        [button(cancel_label, onCancel, "secondary"),
+        button(confirm_label, onConfirm, "primary")],
+        onCancel
+    );
+}
+
+/// Non-blocking toast banner. variant: info | success | danger | accent
+public fn toast(message: string, variant: string = "info", onDismiss = null, props: map = {
+}) -> map {
+    return node("toast", merge_props({
+        "text": message, "variant": variant, "onDismiss": onDismiss
+    }, props), []);
+}
+
+/// Raw HTML passthrough (trusted content only).
+public fn html(raw: string) -> map {
+    return node("html", {
+        "raw": raw
+    }, []);
+}
+
+/// Friendly empty-state block.
+public fn empty(icon: string, title: string, subtitle: string = "") -> map {
+    let kids = [node("text", {
+        "text": icon, "cls": "big"
+    }, []), text(title, "title")];
+    if subtitle != "" {
+        kids.push(text(subtitle, "muted"));
+    }
+    return node("empty", {
+    }, kids);
+}

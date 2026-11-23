@@ -1,0 +1,182 @@
+// cli/BuildWeb.matrix
+// Wasm host HTML emitter and Web target packager.
+
+import "Fs" as fs;
+import "Manifest" as man;
+import "Exec" as ex;
+
+public fn fill_host_page(
+    appdir: string,
+    outdir: string,
+    flat: string,
+    client_js: string,
+    inline_sources: bool
+) -> int {
+    let name = man.app_name_of(appdir);
+    let bundle_id = man.app_bundle_id_of(appdir);
+    let tpl_r = read_file(fs.join_dir(fs.fw_root(), "targets/wasmhost.template.html"));
+    if tpl_r.is_err() {
+        println("error: missing targets/wasmhost.template.html");
+        return 1;
+    }
+    let tpl = string(tpl_r.unwrap());
+    let app_src_json = "null";
+    if inline_sources {
+        app_src_json = fs.safe_script_json(flat);
+    }
+    let icon_tag = "";
+    let touch_icon_tag = "";
+    let icon_src = man.app_icon_of(appdir);
+    if icon_src != "" {
+        let ext = fs.file_ext(icon_src);
+        if ext == "" {
+            ext = "png";
+        }
+        let icon_name = "icon." + ext;
+        if copy_file(icon_src, outdir + "/" + icon_name).is_ok() {
+            let e_icon = fs.html_escape(icon_name);
+            icon_tag = "<link rel=\"icon\" href=\"" + e_icon + "\">";
+            touch_icon_tag = "\n<link rel=\"apple-touch-icon\" href=\"" + e_icon + "\">";
+        }
+    }
+    let theme_map = man.app_theme_of(appdir);
+    let theme_json = "null";
+    let theme_color = "#4f46e5";
+    let status_style = "default";
+    if theme_map.len() > 0 {
+        theme_json = fs.safe_script_json(theme_map);
+        if theme_map.has("primary") {
+            theme_color = string(theme_map["primary"]);
+        }
+        if theme_map.has("mode") and string(theme_map["mode"]) == "dark" {
+            status_style = "black-translucent";
+        }
+    }
+    let pwa_tags = "<meta name=\"theme-color\" content=\"" + fs.html_escape(theme_color) + "\">\n"
+    + "<meta name=\"apple-mobile-web-app-capable\" content=\"yes\">\n"
+    + "<meta name=\"mobile-web-app-capable\" content=\"yes\">\n"
+    + "<meta name=\"apple-mobile-web-app-status-bar-style\" content=\"" + status_style + "\">\n"
+    + "<meta name=\"apple-mobile-web-app-title\" content=\"" + fs.html_escape(name) + "\">\n"
+    + "<link rel=\"manifest\" href=\"manifest.json\">" + touch_icon_tag;
+
+    let out = tpl.replace("\{\{APP_TITLE\}\}", fs.html_escape(name))
+    .replace("\{\{APP_ICON_TAG\}\}", icon_tag)
+    .replace("\{\{APP_PWA_TAGS\}\}", pwa_tags)
+    .replace("\{\{APP_BUNDLE_ID_JSON\}\}", fs.safe_script_json(bundle_id))
+    .replace("\{\{APP_THEME_JSON\}\}", theme_json)
+    .replace("\{\{APP_SOURCE_JSON\}\}", app_src_json)
+    .replace("\{\{CLIENT_JS\}\}", client_js);
+    if not fs.write_checked(outdir + "/index.html", out) {
+        return 1;
+    }
+    return 0;
+}
+
+fn emit_pwa_files(appdir: string, outdir: string) -> int {
+    let name = man.app_name_of(appdir);
+    let bundle_id = man.app_bundle_id_of(appdir);
+    let app_ver = man.app_version_of(appdir);
+    let tm = man.app_theme_of(appdir);
+    let theme_color = if tm.has("primary") {
+        string(tm["primary"])
+    } else {
+        "#4f46e5"
+    };
+    let bg_color = if tm.has("mode") and string(tm["mode"]) == "dark" {
+        "#0b0f1a"
+    } else {
+        "#f4f5fb"
+    };
+    let manifest = {
+        "name": name,
+        "short_name": name,
+        "start_url": "./index.html",
+        "display": "standalone",
+        "background_color": bg_color,
+        "theme_color": theme_color,
+    };
+    let icon_src = man.app_icon_of(appdir);
+    if icon_src != "" {
+        let ext = fs.file_ext(icon_src);
+        if ext == "" {
+            ext = "png";
+        }
+        let icon_name = "icon." + ext;
+        if file_exists(outdir + "/" + icon_name) {
+            let mime = "image/png";
+            if ext == "svg" {
+                mime = "image/svg+xml";
+            } elif ext == "jpg" or ext == "jpeg" {
+                mime = "image/jpeg";
+            }
+            manifest["icons"] = [{
+                "src": icon_name, "sizes": "any", "type": mime
+            }
+            ];
+        }
+    }
+    if not fs.write_checked(outdir + "/manifest.json", json_write(manifest)) {
+        return 1;
+    }
+
+    let safe_bid = fs.kotlin_str_escape(bundle_id).replace("'", "\\'");
+    let safe_ver = fs.kotlin_str_escape(app_ver).replace("'", "\\'");
+    let sw_txt = fs.render_template("targets/sw.template.js", {
+        "BUNDLE_ID": safe_bid, "APP_VERSION": safe_ver
+    });
+    if sw_txt == "" {
+        return 1;
+    }
+    if not fs.write_checked(outdir + "/sw.js", sw_txt) {
+        return 1;
+    }
+    return 0;
+}
+
+public fn copy_wasm_assets(rt_dir: string, dest_dir: string) -> int {
+    let fw = fs.fw_root();
+    let copies = [
+    [rt_dir + "/spid3r.js", dest_dir + "/spid3r.js", "spid3r.js"],
+    [rt_dir + "/spid3r.wasm", dest_dir + "/spid3r.wasm", "spid3r.wasm"],
+    [fs.join_dir(fw, "targets/wasmworker.js"), dest_dir + "/wasmworker.js", "wasmworker.js"],
+    ];
+    for item in copies {
+        let r = copy_file(item[0], item[1]);
+        if r.is_err() {
+            println("error: copying " + item[2] + " failed: " + string(r.unwrap_err()));
+            return 1;
+        }
+    }
+    return 0;
+}
+
+public fn build(appdir: string, outdir: string, flat: string, client_js: string) -> int {
+    fs.ensure_dir(outdir);
+    fs.setup_import_path();
+    for warn in man.validate_manifest(appdir) {
+        println("warning: " + warn);
+    }
+    println("building web app -> " + outdir + "/index.html");
+    let assets = ex.wasm_runtime_assets(outdir + "/_runtime");
+    if assets == "" {
+        return 1;
+    }
+    if copy_wasm_assets(assets, outdir) != 0 {
+        return 1;
+    }
+    if not fs.copy_app_assets(appdir, outdir) {
+        return 1;
+    }
+    if not fs.write_checked(outdir + "/app.matrix", flat) {
+        return 1;
+    }
+    let rc = fill_host_page(appdir, outdir, flat, client_js, false);
+    if rc != 0 {
+        return rc;
+    }
+    if emit_pwa_files(appdir, outdir) != 0 {
+        return 1;
+    }
+    println("done: " + outdir + "/index.html (serve the folder over http, or open in a browser)");
+    return 0;
+}

@@ -1,0 +1,32 @@
+// examples/demo/main.matrix
+// NATIVE ENTRY (desktop/dev). gui_* natives only link inside the entry file,
+// so the five shims below hand them to the framework. The author file
+// (app.matrix) stays entry-agnostic; wasm/mobile targets use a driver instead.
+
+import "app" as appdef;
+
+fn studio_title(t: string) {
+    gui_title(t);
+}
+
+fn studio_html(h: string) {
+    gui_set_html(h);
+}
+
+fn studio_eval(js: string) {
+    gui_eval(js);
+}
+
+fn studio_on(n: string, cb) {
+    gui_on(n, cb);
+}
+
+fn studio_emit(n: string, p: string) {
+    gui_emit(n, p);
+}
+
+fn main() -> int {
+    let app = appdef.studio_app();
+    app.bridge(studio_title, studio_html, studio_eval, studio_on, studio_emit);
+    return app.run();
+}

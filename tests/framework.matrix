@@ -1,0 +1,754 @@
+// tests/framework.matrix
+// AppStudio framework unit tests — deterministic, no GUI/network needed.
+// Run:  spid3r run tests/framework.matrix   (or: spid3r test tests/framework.matrix)
+
+import "studio/Util" as U;
+import "studio/Theme" as theme;
+import "studio/State" as state;
+import "studio/Storage" as storage;
+import "studio/Router" as nav;
+import "studio/Render" as render;
+import "studio/Components" as ui;
+import "studio/CSS" as css;
+import "studio/Bridge" as br;
+import "studio/ClientJS" as client;
+import "studio/Http" as http;
+import "studio/App" as appkit;
+import "tools/FlatKit" as flatkit;
+
+let passed = 0;
+let failed = 0;
+
+fn check_ok(cond: bool, name: string) {
+    if cond {
+        passed += 1;
+    } else {
+        failed += 1;
+        println("FAIL: " + name);
+    }
+}
+
+fn check_eq(a, b, name: string) {
+    check_ok(string(a) == string(b), name + " (" + string(a) + " != " + string(b) + ")");
+}
+
+fn main() -> int {
+    // ---------- Util ----------
+    check_eq(U.esc("<b>&"), "&lt;b&gt;&amp;", "util.esc");
+    let m = {
+        "a": 1
+    };
+    check_eq(U.prop(m, "a"), 1, "util.prop hit");
+    check_eq(U.prop(m, "zz"), null, "util.prop miss");
+    check_eq(U.s(m, "zz"), "", "util.s miss");
+    check_eq(U.ival({
+        "n": 7
+    }, "n", 0), 7, "util.ival hit");
+    check_eq(U.ival({
+    }, "n", 5), 5, "util.ival default");
+
+    // ---------- Theme ----------
+    theme.mode("dark");
+    check_eq(theme.token("mode"), "dark", "theme dark");
+    check_ok(theme.token("bg") == "#0b0f1a", "theme dark bg");
+    theme.mode("light");
+    check_eq(theme.token("mode"), "light", "theme light back");
+    theme.primary("#ff0000");
+    check_eq(theme.token("primary"), "#ff0000", "theme.primary");
+    theme.mode("light");
+
+    // ---------- State ----------
+    state.set("k", 41);
+    check_eq(state.get("k"), 41, "state.set/get");
+    check_eq(state.get_or("nope", "d"), "d", "state.get_or missing");
+    state.set("listy", [1, 2]);
+    check_eq(state.get_list("listy").len(), 2, "state.get_list");
+    check_eq(state.get_list("nope").len(), 0, "state.get_list missing");
+    state.set("n", 1);
+    state.incr("n", 4);
+    check_eq(state.get("n"), 5, "state.incr");
+    state.update("n", x => int(x) * 3);
+    check_eq(state.get("n"), 15, "state.update");
+    state.drop("n");
+    check_eq(state.get("n"), null, "state.drop");
+
+    // ---------- Storage ----------
+    storage.configure("_test_storage");
+    storage.set("greeting", "hello");
+    check_eq(storage.get("greeting"), "hello", "storage roundtrip");
+    let reread = storage.get("greeting");
+    check_eq(reread, "hello", "storage persisted string");
+    storage.set("nums", [1, 2, 3]);
+    check_eq(storage.get_list("nums").len(), 3, "storage list");
+    storage.remove("greeting");
+    check_eq(storage.get("greeting"), null, "storage remove");
+    storage.set("m", {
+        "x": 1
+    });
+    check_eq(storage.get_map("m")["x"], 1, "storage map");
+
+    // ---------- Router ----------
+    nav.configure_single("Home");
+    check_eq(nav.page_name(), "Home", "router single root");
+    check_eq(nav.depth(), 1, "router depth 1");
+    nav.push("Detail", {
+        "id": 7
+    });
+    check_eq(nav.page_name(), "Detail", "router push");
+    check_eq(nav.depth(), 2, "router depth 2");
+    check_eq(nav.params()["id"], 7, "router params");
+    check_ok(nav.can_pop(), "router can_pop");
+    nav.pop();
+    check_eq(nav.page_name(), "Home", "router pop");
+    nav.configure([{
+        "label": "Home", "icon": "H"
+    }, {
+        "label": "Stats", "icon": "S"
+    }
+    ]);
+    check_eq(nav.page_name(), "Home", "router tab root");
+    nav.switch_tab(1);
+    check_eq(nav.page_name(), "Stats", "router switch_tab");
+    check_eq(nav.tab_index(), 1, "router tab_index");
+    let snap = nav.snapshot();
+    check_ok(snap.has("stacks") and snap.has("active"), "router snapshot keys");
+    nav.restore(snap);
+    check_eq(nav.page_name(), "Stats", "router restore");
+
+    // ---------- Components + Render ----------
+    let n = ui.page([ui.navbar("Title"), ui.text("hello <x>", "title"), ui.button("Tap", "do_thing"), ui.row([ui.text("a"), ui.text("b")], {
+        "gap": 8
+    }), ui.toggle(true, "flip"), ui.list([{
+        "title": "one"
+    }, {
+        "title": "two"
+    }
+    ]), ui.badge("3 / 4", "primary"),]);
+    let html = render.document(n, [], 0);
+    check_ok(html.contains("data-pagekey=\"\"") == false, "render omits empty pagekey");
+    check_ok(html.contains("&lt;x&gt;"), "render escapes text");
+    check_ok(html.contains("data-tap=\"do_thing\""), "render named handler slot");
+    check_ok(html.contains("btn primary"), "render button variant");
+    check_ok(html.contains("style=\"gap:8px;\""), "render layout style");
+    check_ok(html.contains("toggle on"), "render toggle on");
+    check_ok(html.contains("tile-title"), "render default list tiles");
+    check_ok(html.contains("badge primary"), "render badge");
+
+    // handlers as closures get slots
+    let n2 = ui.button("C", (_ev) => {
+        let _x = 1;
+    });
+    let h2 = render.node_html(n2);
+    check_ok(
+        h2.contains("data-tap=\"f1\"") or h2.contains("data-tap=\"f"),
+        "render closure slot"
+    );
+
+    // tab bar chrome appears when tabs configured + at root
+    nav.configure([{
+        "label": "A", "icon": "X"
+    }, {
+        "label": "B"
+    }
+    ]);
+    let html3 = render.document(
+        ui.page([ui.text("x")]),
+        nav.tabs(),
+        nav.tab_index()
+    );
+    check_ok(html3.contains("tabbar"), "render tabbar chrome");
+    nav.push("B");
+    let html4 = render.document(
+        ui.page([ui.text("x")]),
+        nav.tabs(),
+        nav.tab_index()
+    );
+    check_ok(not html4.contains("tabbar"), "no tabbar on pushed page");
+    nav.pop();
+
+    // ---------- FlatKit ----------
+    let flat = flatkit.bundle("examples/demo");
+    check_ok(flat != "", "flatkit bundles the demo");
+    check_ok(not flat.contains("import \""), "flatkit strips imports");
+    check_ok(flat.contains("pub_Components_page"), "flatkit prefixes framework fns");
+    check_ok(flat.contains("fn studio_app()"), "flatkit keeps author fns");
+    check_ok(flat.contains("app.wasm_run("), "flatkit keeps unprefixed App method calls");
+    check_ok(
+        flat.contains("\"params\": params"),
+        "flatkit preserves default-arg param shadowing"
+    );
+    check_ok(flat.contains("fn main()"), "flatkit appends driver main");
+    // flattened source must be syntactically valid
+    let chk = check_source_snippet(flat);
+    check_ok(chk, "flatkit output parses");
+
+    // ---------- Phase 1 Security & Protocol ----------
+    // 1. safe_url
+    check_eq(
+        U.safe_url("https://example.com/a.png"),
+        "https://example.com/a.png",
+        "safe_url allows https"
+    );
+    check_eq(
+        U.safe_url("http://localhost:8080/x"),
+        "http://localhost:8080/x",
+        "safe_url allows http"
+    );
+    check_eq(
+        U.safe_url("data:image/png;base64,AA=="),
+        "data:image/png;base64,AA==",
+        "safe_url allows raster data"
+    );
+    check_eq(U.safe_url("/assets/img.png"), "/assets/img.png", "safe_url allows rooted path");
+    check_eq(U.safe_url("assets/logo.png"), "assets/logo.png", "safe_url allows rel path");
+    check_eq(U.safe_url("javascript:alert(1)"), "", "safe_url blocks javascript");
+    check_eq(U.safe_url("  JaVaScRiPt:void(0)"), "", "safe_url blocks obfuscated javascript");
+    check_eq(
+        U.safe_url("data:text/html,<script>1</script>"),
+        "",
+        "safe_url blocks data:text/html"
+    );
+    check_eq(U.safe_url("data:image/svg+xml,<svg/>"), "", "safe_url blocks svg data");
+    check_eq(U.safe_url("//evil.example/x.png"), "", "safe_url blocks protocol-relative");
+
+    // 2. esc_icon
+    check_eq(U.esc_icon("&#128465;"), "&#128465;", "esc_icon preserves decimal entity");
+    check_eq(U.esc_icon("&#x1F600;"), "&#x1F600;", "esc_icon preserves hex entity");
+    check_eq(
+        U.esc_icon("<img src=x onerror=1>"),
+        "&lt;img src=x onerror=1&gt;",
+        "esc_icon escapes html"
+    );
+    check_eq(
+        U.esc_icon("&#9989;<script>x</script>"),
+        "&#9989;&lt;script&gt;x&lt;/script&gt;",
+        "esc_icon escapes mixed tag"
+    );
+
+    // 3. esc_css_val & CSS token sanitization
+    check_eq(U.esc_css_val("#4f46e5"), "#4f46e5", "esc_css_val preserves hex");
+    check_ok(
+        not U.esc_css_val("#000;}body{display:none}").contains("}"),
+        "esc_css_val strips braces"
+    );
+    check_eq(U.esc_css_val("expression(alert(1))"), "", "esc_css_val blocks expression");
+    theme.primary("#000;}body{color:red}<style>");
+    let st_css = css.stylesheet();
+    check_ok(
+        not st_css.contains("<style>") and not st_css.contains("body{color:red}"),
+        "css.stylesheet sanitizes tokens"
+    );
+    theme.primary("#4f46e5");
+
+    // 4. Render escaping
+    let ib_html = render.node_html(ui.iconbutton("<script>x</script>", "a"));
+    check_ok(not ib_html.contains("<script>"), "render iconbutton escapes html");
+    let fab_html = render.node_html(ui.fab("<img onerror=1>", "a"));
+    check_ok(not fab_html.contains("<img"), "render fab escapes html");
+    let sl_html = render.node_html(ui.node("slider", {
+        "min": "0\" onload=\"x", "max": "10", "value": "5", "onInput": "s"
+    }, []));
+    check_ok(sl_html.contains("0&quot; onload=&quot;x"), "render slider escapes attrs");
+    let bad_img = render.node_html(ui.image("javascript:alert(1)"));
+    check_ok(bad_img.contains("src=\"\""), "render image blocks javascript url");
+    let bad_av = render.node_html(ui.avatar("javascript:alert(1)", "AB"));
+    check_ok(
+        not bad_av.contains("javascript:") and bad_av.contains(">AB<"),
+        "render avatar falls back safely"
+    );
+
+    // 5. Theme snapshot / restore
+    theme.mode("dark");
+    theme.primary("#123456");
+    let ts = theme.snapshot();
+    theme.mode("light");
+    theme.primary("#ffffff");
+    theme.restore(ts);
+    check_eq(theme.token("mode"), "dark", "theme.restore mode");
+    check_eq(theme.token("primary"), "#123456", "theme.restore primary");
+    theme.mode("light");
+    theme.primary("#4f46e5");
+
+    // 6. Storage cache reset, atomic save, memory-only mode
+    storage.configure("_test_storage");
+    storage.set("persist_k", "v1");
+    check_eq(storage.last_err(), "", "storage atomic save no error");
+    storage.configure("_test_storage_empty");
+    check_eq(storage.get("persist_k"), null, "storage configure resets stale cache");
+    storage.set_memory_only(true);
+    storage.configure("_test_storage_mem_should_not_exist");
+    storage.set("mem_k", 99);
+    check_eq(storage.get("mem_k"), 99, "storage memory-only works");
+    check_ok(not is_dir("_test_storage_mem_should_not_exist"), "storage memory-only skips disk");
+    storage.set_memory_only(false);
+
+    // 7. Error boundary in Bridge & App
+    let rendered_err = "";
+    br.install((t) => {
+        let _ = t;
+    }, (h) => {
+        rendered_err = h;
+    }, (js) => {
+        let _ = js;
+    }, (n, cb) => {
+        let _ = n; let _c = cb;
+    }, (n, p) => {
+        let _ = n; let _p = p;
+    });
+    let err_app = appkit.App("ErrApp", "sh.test.err", "1.0.0")
+    .page("Home", () => {
+        let m = {
+        };
+        return ui.page([ui.text(string(m["boom"]))]);
+    })
+    .handler("throw_h", (_ev) => {
+        let m = {
+        };
+        let _z = m["kaboom"];
+    });
+    err_app.prepare(true);
+    br.dispatch_and_render({
+        "sid": "throw_h"
+    }, err_app);
+    check_ok(
+        rendered_err.contains("Handler error") and rendered_err.contains("throw_h"),
+        "bridge catches handler exception"
+    );
+    err_app.render();
+    check_ok(
+        rendered_err.contains("Page &#39;Home&#39; failed") or rendered_err.contains("Page 'Home' failed"),
+        "app catches page render exception"
+    );
+
+    // Cleanup test directories
+    dir_remove("_test_storage");
+    dir_remove("_test_storage_empty");
+
+    // ---------- Phase 2 Core Framework Fixes ----------
+    // 1. Util.fval & ival safety
+    check_eq(U.fval({
+        "f": 0.75
+    }, "f", 0.0), 0.75, "util.fval float");
+    check_eq(U.fval({
+        "i": 1
+    }, "i", 0.0), 1.0, "util.fval int");
+    check_eq(U.fval({
+        "bad": "abc"
+    }, "bad", 0.25), 0.25, "util.fval fallback");
+    check_eq(U.ival({
+        "bad": "xyz"
+    }, "bad", 7), 7, "util.ival fallback");
+
+    // 2. ui.progress float + clamping & ui.column CSS class
+    let p50 = render.node_html(ui.progress(0.5));
+    check_ok(p50.contains("width:50%"), "progress 0.5 renders 50%");
+    let p33 = render.node_html(ui.progress(0.333));
+    check_ok(p33.contains("width:33%"), "progress 0.333 renders 33%");
+    let p_lo = render.node_html(ui.progress(-0.2));
+    check_ok(p_lo.contains("width:0%"), "progress clamps negative to 0%");
+    let p_hi = render.node_html(ui.progress(1.5));
+    check_ok(p_hi.contains("width:100%"), "progress clamps >1 to 100%");
+
+    let col_html = render.node_html(ui.column([ui.text("a")], {
+        "gap": 12
+    }));
+    check_ok(
+        col_html.contains("class=\"column\"") and col_html.contains("gap:12px;"),
+        "column class + gap"
+    );
+    check_ok(
+        css.stylesheet().contains(".col,.column{"),
+        "css styles .column alongside .col"
+    );
+
+    // 3. Renderer & Layout fixes
+    let txt_default = render.node_html(ui.text("hello"));
+    check_ok(
+        txt_default.contains("class=\"body\"") and not txt_default.contains("body body"),
+        "text_html no duplicate body class"
+    );
+    let list_notitle = render.node_html(ui.list([{
+        "subtitle": "sub only"
+    }
+    ]));
+    check_ok(
+        list_notitle.contains("tile-sub") and list_notitle.contains("sub only"),
+        "list_html handles missing title"
+    );
+    let tab_noact = render.node_html(ui.node("tabbar", {
+        "tabs": ["A", "B"]
+    }, []));
+    check_ok(tab_noact.contains("tab active"), "tabbar handles missing active");
+    check_ok(
+        render.node_html(ui.spacer(0)).contains("spacer grow"),
+        "spacer(0) expands as grow"
+    );
+    check_ok(
+        render.node_html(ui.flex_spacer()).contains("spacer grow"),
+        "flex_spacer expands as grow"
+    );
+    let sp12 = render.node_html(ui.spacer(12));
+    check_ok(sp12.contains("width:12px;height:12px;"), "spacer(12) sets width and height");
+    let row_dim = render.node_html(ui.row([], {
+        "width": "100%", "height": 40
+    }));
+    check_ok(row_dim.contains("width:100%;height:40px;"), "style_of supports string units");
+    let nav_pg = render.node_html(ui.page([ui.navbar("Top"), ui.text("Body")]));
+    check_ok(
+        nav_pg.starts_with("<div class=\"navbar\"") and nav_pg.contains("page has-nav"),
+        "navbar hoisted out of .page"
+    );
+    let sheet_h = render.node_html(ui.sheet([ui.text("Inside")], {
+        "onDismiss": "close"
+    }));
+    check_ok(
+        sheet_h.contains("data-stop-tap=\"1\"") and sheet_h.contains("data-tap=\"close\""),
+        "sheet interior stops tap bubbling"
+    );
+    let tog_off = render.node_html(ui.toggle(false, "flip"));
+    check_ok(
+        tog_off.contains("data-arg=\"1\"") and tog_off.contains("data-val=\"true\""),
+        "toggle emits arg and val"
+    );
+    let multi_ev = render.node_html(ui.node("input", {
+        "placeholder": "p", "onInput": "i", "onChange": "c", "onSubmit": "s", "arg": "k"
+    }, []));
+    check_ok(
+        multi_ev.contains("data-input=\"i\"") and multi_ev.contains("data-change=\"c\"") and multi_ev.contains("data-submit=\"s\"") and multi_ev.contains("data-arg=\"k\""),
+        "input supports input/change/submit + single arg"
+    );
+    let css_s = css.stylesheet();
+    check_ok(
+        css_s.contains(".page.has-nav") and css_s.contains(".page.page-enter") and css_s.contains(".navbar{flex:none;"),
+        "css has nav/enter/navbar flex rules"
+    );
+
+    // 4. State.drop, Storage.remove & module reset()
+    state.reset();
+    state.set("x", 10);
+    state.drop("x");
+    check_eq(state.get_or("x", 5), 5, "state.drop deletes key so get_or returns default");
+    check_eq(state.get("x"), null, "state.drop makes get return null");
+    state.reset();
+    check_eq(state.get("k"), null, "state.reset clears keys");
+
+    storage.configure("_test_storage_p2");
+    storage.set("skey", "v");
+    storage.remove("skey");
+    check_eq(storage.get("skey", "fallback"), "fallback", "storage.remove deletes key");
+    storage.load();
+    check_eq(
+        storage.get("skey", "fallback"),
+        "fallback",
+        "storage.remove persisted deletion"
+    );
+    storage.reset();
+    check_eq(storage.all().keys().len(), 0, "storage.reset clears cache");
+    dir_remove("_test_storage_p2");
+
+    // 5. Router edge cases & reset()
+    nav.reset();
+    check_eq(nav.page_name(), "", "empty router page_name");
+    check_eq(nav.depth(), 0, "empty router depth");
+    check_ok(not nav.can_pop(), "empty router cannot pop");
+    nav.configure_single("Login");
+    nav.replace("Dash", {
+        "ok": 1
+    });
+    check_eq(nav.depth(), 1, "router.replace at depth 1 keeps depth 1");
+    check_ok(not nav.can_pop(), "router.replace at depth 1 leaves no back button");
+    check_eq(nav.page_name(), "Dash", "router.replace updates page");
+    check_eq(nav.params()["ok"], 1, "router.replace updates params");
+    nav.reset();
+
+    // 6. Theme custom nested flattening + mode override preservation
+    theme.reset();
+    theme.custom({
+        "colors": {
+            "primary": "#112233"
+        }
+        , "radius": "8"
+    });
+    check_eq(theme.token("primary"), "#112233", "theme.custom nested map flattening");
+    theme.mode("dark");
+    check_eq(theme.token("mode"), "dark", "theme.mode switches to dark");
+    check_eq(theme.token("primary"), "#112233", "theme.mode preserves custom primary");
+    check_eq(theme.token("radius"), "8", "theme.mode preserves custom radius");
+    theme.reset();
+    check_eq(theme.token("mode"), "light", "theme.reset restores light");
+    check_eq(theme.token("primary"), "#4f46e5", "theme.reset restores default primary");
+
+    // 7. Bridge.has_named, dispatch_safe, reset
+    br.reset();
+    br.named_handler("ok_h", (_ev) => {
+    });
+    br.named_handler("bad_h", (_ev) => {
+        let m = {
+        };
+        let _x = m["boom"];
+    });
+    check_ok(br.has_named("ok_h") and not br.has_named("missing_h"), "bridge.has_named");
+    check_eq(br.dispatch_safe({
+        "sid": "ok_h"
+    }), "", "bridge.dispatch_safe ok");
+    check_ok(br.dispatch_safe({
+        "sid": "bad_h"
+    }).contains("bad_h:"), "bridge.dispatch_safe catches error");
+    br.reset();
+
+    // ---------- Phase 3 & 4 FlatKit Multi-File, Lexer & Isolation ----------
+    let flat_win = flatkit.bundle("examples\\demo");
+    check_ok(
+        flat_win != "" and flat_win.contains("fn studio_app()"),
+        "flatkit handles Windows backslash path"
+    );
+    check_ok(check_source_snippet(flat_win), "flatkit backslash bundle passes spid3r check");
+
+    let mf_dir = "_test_storage_mf";
+    dir_create(mf_dir);
+    dir_create(mf_dir + "/pages");
+    let sub_src = r#"import "../studio/Components" as ui;
+import "../studio/State" as state;
+public fn SubPage() -> map {
+    return ui.page([ui.text("Sub n={state.get_or("n", 7)}")]);
+}
+"#
+
+    ;
+    let main_mf = "// fn fake_doc_fn()\nimport \"studio/App\" as appkit;\nimport \"studio/Components\" as ui;\nimport \"studio/Http\" as http;\nimport \"pages/Sub\" as sub;\nlet cache = 42;\nlet dir = \"user_dir\";\nclass Runner {\n    public fn run(self) -> string { return \"runner_ok\"; }\n}\nfn Home() -> map {\n    let r = Runner();\n    let _fn_ref = http.get;\n    let msg = \"Click to import items; fn dummy()\";\n    return ui.page([ui.text(msg + \":\" + r.run() + \":\" + string(cache) + \":\" + dir)]);\n}\npublic fn studio_app() {\n    return appkit.App(\"MF\", \"sh.test.mf\", \"1.0.0\").page(\"Home\", Home).page(\"Sub\", sub.SubPage);\n}\n";
+    write_file(mf_dir + "/pages/Sub.matrix", sub_src);
+    write_file(mf_dir + "/app.matrix", main_mf);
+    let mf_flat = flatkit.bundle(mf_dir);
+    check_ok(mf_flat != "", "flatkit bundles multi-file app with Http");
+    check_ok(mf_flat.contains("// fn fake_doc_fn()"), "flatkit preserves comments verbatim");
+    check_ok(
+        mf_flat.contains("\"Click to import items; fn dummy()\""),
+        "flatkit preserves strings with import/fn"
+    );
+    check_ok(mf_flat.contains("r.run()"), "flatkit keeps non-App .run() untouched");
+    check_ok(
+        mf_flat.contains("mod_u_app_cache") and mf_flat.contains("mod_Storage_cache"),
+        "flatkit prefixes colliding globals per module"
+    );
+    check_ok(mf_flat.contains("pub_Http_get"), "flatkit bundles Http module");
+    check_ok(
+        mf_flat.contains("pub_u_pages_Sub_SubPage"),
+        "flatkit bundles pages/Sub submodule"
+    );
+    check_ok(
+        mf_flat.contains("pub_State_get_or"),
+        "flatkit rewrites expressions inside string interpolation"
+    );
+    check_ok(check_source_snippet(mf_flat), "multi-file flatkit output passes spid3r check");
+    dir_remove(mf_dir);
+    dir_remove("_test_storage");
+
+    // ---------- Phase 5: Morph, Theme Version, Host Effects & Async Http ----------
+    theme.reset();
+    let tv0 = theme.version();
+    theme.mode("dark");
+    check_ok(theme.version() > tv0, "theme.mode bumps version");
+    let tv1 = theme.version();
+    theme.primary("#00aaff");
+    check_ok(theme.version() > tv1, "theme.primary bumps version");
+    theme.set_version(42);
+    check_eq(theme.version(), 42, "theme.set_version restores revision");
+    theme.set_version(0);
+    check_eq(theme.version(), 42, "theme.set_version ignores non-positive");
+    theme.reset();
+    check_ok(theme.version() > 42, "theme.reset advances version");
+
+    br.reset();
+    check_eq(br.platform(), "native", "bridge default platform is native");
+    br.set_host_caps({
+        "platform": "android", "prefers_dark": true, "viewport_width": 412
+    });
+    check_eq(br.platform(), "android", "bridge caps platform");
+    check_ok(br.prefers_dark(), "bridge caps prefers_dark");
+    check_eq(br.caps()["viewport_width"], 412, "bridge caps viewport_width");
+    br.copy_text("hello");
+    check_ok(br.open_url("https://example.com"), "bridge open_url allows https");
+    check_ok(not br.open_url("javascript:alert(1)"), "bridge open_url rejects javascript:");
+    br.haptic("medium");
+    let efs = br.drain_effects();
+    check_eq(efs.len(), 3, "bridge drains 3 effects");
+    check_eq(efs[0]["kind"], "clipboard.copy", "effect 0 clipboard.copy");
+    check_eq(efs[1]["kind"], "open_url", "effect 1 open_url");
+    check_eq(efs[2]["kind"], "haptic", "effect 2 haptic");
+    check_eq(br.drain_effects().len(), 0, "drain_effects clears queue");
+
+    br.set_host_caps({
+        "platform": "web"
+    });
+    check_ok(
+        not http.get_async("javascript:alert(1)", "on_resp"),
+        "http.get_async rejects javascript:"
+    );
+    check_eq(br.drain_effects().len(), 0, "rejected async http enqueues no effect");
+    check_ok(
+        http.get_async("https://api.example.com/items", "on_resp"),
+        "http.get_async accepts https"
+    );
+    check_ok(http.post_json_async("/api/save", {
+        "x": 1
+    }, "on_post"), "http.post_json_async accepts relative path");
+    let hefs = br.drain_effects();
+    check_eq(hefs.len(), 2, "http async enqueues 2 effects on web");
+    check_eq(hefs[0]["kind"], "http", "http effect kind");
+    check_eq(hefs[0]["method"], "GET", "http effect GET");
+    check_eq(hefs[0]["cb"], "on_resp", "http effect callback sid");
+    check_eq(hefs[1]["method"], "POST", "http effect POST");
+
+    let keyed = render.node_html(ui.row([ui.card([ui.text("Item")], {
+        "key": "k-1"
+    })]));
+    check_ok(keyed.contains("data-key=\"k-1\""), "render emits data-key attribute");
+    let keyed_list = render.node_html(ui.list([{
+        "title": "Alpha", "key": "row-a"
+    }
+    ]));
+    check_ok(keyed_list.contains("data-key=\"row-a\""), "list_html forwards data-key");
+
+    let cjs = client.runtime_js();
+    check_ok(
+        cjs.contains("patch:") and cjs.contains("morphNode") and cjs.contains("runEffects"),
+        "ClientJS exposes morph and runEffects"
+    );
+    check_ok(
+        cjs.contains("'submit'") and cjs.contains("role") and cjs.contains("SELECT"),
+        "ClientJS handles form submit, switch keyboard, and select/checkbox morphing"
+    );
+
+    // ---------- Phase 6 Task 6.1: UI Primitives, Disabled & ARIA ----------
+    let cb_html = render.node_html(ui.checkbox(true, "on_chk", "Accept terms"));
+    check_ok(
+        cb_html.contains("type=\"checkbox\"") and cb_html.contains("checked") and cb_html.contains("aria-checked=\"true\""),
+        "checkbox renders checked + aria-checked"
+    );
+
+    let sel_html = render.node_html(ui.picker([{
+        "value": "hi", "label": "High"
+    }, "low"], "hi", "on_sel"));
+    check_ok(
+        sel_html.contains("<select") and sel_html.contains("value=\"hi\" selected") and sel_html.contains(">High</option>"),
+        "select/picker renders selected option"
+    );
+
+    let seg_html = render.node_html(ui.segmented(["All", "Open"], 1, "on_seg"));
+    check_ok(
+        seg_html.contains("role=\"tablist\"") and seg_html.contains("seg-btn active") and seg_html.contains("aria-selected=\"true\""),
+        "segmented control renders active tab + ARIA"
+    );
+
+    let sp_html = render.node_html(ui.spinner(20, "Saving"));
+    check_ok(
+        sp_html.contains("role=\"status\"") and sp_html.contains("aria-label=\"Saving\""),
+        "spinner renders status role and aria-label"
+    );
+
+    let dlg_html = render.node_html(
+        ui.confirm("Delete?", "Confirm action", "do_yes", "do_no")
+    );
+    check_ok(
+        dlg_html.contains("role=\"dialog\"") and dlg_html.contains("aria-modal=\"true\"") and dlg_html.contains("data-stop-tap=\"1\""),
+        "confirm dialog renders modal ARIA + stop-tap"
+    );
+
+    let tst_html = render.node_html(ui.toast("Saved!", "success", "dismiss_t"));
+    check_ok(
+        tst_html.contains("toast success") and tst_html.contains("aria-live=\"polite\""),
+        "toast renders variant + polite live region"
+    );
+
+    let grd_html = render.node_html(ui.grid([ui.text("A"), ui.text("B")], 3, 12));
+    check_ok(
+        grd_html.contains("grid-template-columns:repeat(3,minmax(0,1fr))"),
+        "grid renders column template style"
+    );
+
+    let chip_html = render.node_html(ui.chip("Urgent", "on_chip", true));
+    check_ok(
+        chip_html.contains("chip selected") and chip_html.contains("aria-pressed=\"true\""),
+        "chip renders selected + aria-pressed"
+    );
+
+    let frm_html = render.node_html(ui.form([ui.input("Name", "on_in")], "on_sub"));
+    check_ok(
+        frm_html.contains("<form") and frm_html.contains("data-submit=\"on_sub\""),
+        "form renders submit attribute"
+    );
+
+    let dis_btn = render.node_html(ui.button("Locked", "do_lock", "primary", {
+        "disabled": true
+    }));
+    check_ok(
+        dis_btn.contains("disabled") and dis_btn.contains("aria-disabled=\"true\"") and not dis_btn.contains("data-tap"),
+        "disabled button omits data-tap and sets disabled + aria-disabled"
+    );
+
+    nav.configure([{
+        "label": "One"
+    }, {
+        "label": "Two"
+    }
+    ]);
+    let a11y_tree = render.document(
+        ui.page(
+            [ui.navbar("Dash"),
+            ui.progress(0.5),
+            ui.toggle(false, "do_t")]
+        ),
+        nav.tabs(),
+        nav.tab_index()
+    );
+    check_ok(
+        a11y_tree.contains("role=\"banner\"") and a11y_tree.contains("aria-valuenow=\"50\"") and a11y_tree.contains("role=\"switch\"") and a11y_tree.contains("role=\"tablist\""),
+        "render emits baseline ARIA roles on navbar, progress, toggle, tabbar"
+    );
+    nav.reset();
+
+    let css_p6 = css.stylesheet();
+    check_ok(
+        css_p6.contains(":focus-visible") and css_p6.contains("prefers-reduced-motion") and css_p6.contains(".dialog") and css_p6.contains(".toast"),
+        "CSS includes focus-visible, reduced-motion, dialog, and toast styles"
+    );
+
+    theme.reset();
+    theme.restore({
+        "mode": "dark", "primary": "#10b981"
+    });
+    check_eq(theme.token("mode"), "dark", "theme.restore partial applies dark mode");
+    check_eq(theme.token("bg"), "#0b0f1a", "theme.restore partial applies dark scheme bg");
+    check_eq(
+        theme.token("primary"),
+        "#10b981",
+        "theme.restore partial applies custom primary"
+    );
+
+    theme.reset();
+    br.reset();
+
+    println("");
+    println("passed: " + string(passed) + "  failed: " + string(failed));
+    if failed > 0 {
+        return 1;
+    }
+    return 0;
+}
+
+/// Parse-check a source string by round-tripping through a temp file.
+fn check_source_snippet(src: string) -> bool {
+    dir_create("_test_storage");
+    let p = "_test_storage/_flat_check.matrix";
+    let w = write_file(p, src);
+    if w.is_err() {
+        dir_remove("_test_storage");
+        return false;
+    }
+    let r = exec_capture("spid3r", ["check", p], null);
+    dir_remove("_test_storage");
+    if r.is_err() {
+        return false;
+    }
+    return int(r.unwrap()["code"]) == 0;
+}

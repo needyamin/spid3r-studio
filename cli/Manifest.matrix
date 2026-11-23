@@ -1,0 +1,226 @@
+// cli/Manifest.matrix
+// Shared studio.json reader, validation, and expanded app metadata accessors.
+
+import "Fs" as fs;
+
+public fn read_manifest(appdir: string) -> map {
+    let r = read_file(fs.join_dir(appdir, "studio.json"));
+    if r.is_err() {
+        return {
+        };
+    }
+    let txt = string(r.unwrap()).trim();
+    let idx = fs.str_find_from(txt, "{", 0);
+    if idx > 0 {
+        txt = txt.slice(idx, txt.len());
+    }
+    try {
+        let m = json_parse(txt);
+        if type_of(m) == "map" {
+            return m;
+        }
+    } catch (_e) {
+        return {
+        };
+    }
+    return {
+    };
+}
+
+public fn find_entry(appdir: string) -> string {
+    let m = read_manifest(appdir);
+    let entry = "";
+    if m.has("entry") {
+        entry = string(m["entry"]);
+    }
+    if entry == "" {
+        if file_exists(fs.join_dir(appdir, "main.matrix")) {
+            entry = "main.matrix";
+        } else {
+            entry = "app.matrix";
+        }
+    }
+    let p = fs.join_dir(appdir, entry);
+    if file_exists(p) {
+        return p;
+    }
+    return "";
+}
+
+public fn app_name_of(appdir: string) -> string {
+    let m = read_manifest(appdir);
+    if m.has("name") and string(m["name"]).trim() != "" {
+        return string(m["name"]);
+    }
+    return fs.base_name(appdir);
+}
+
+public fn app_bundle_id_of(appdir: string) -> string {
+    let m = read_manifest(appdir);
+    if m.has("bundleID") and string(m["bundleID"]).trim() != "" {
+        return string(m["bundleID"]);
+    }
+    return "com.example." + string(app_name_of(appdir)).lower().replace(" ", "");
+}
+
+public fn app_version_of(appdir: string) -> string {
+    let m = read_manifest(appdir);
+    if m.has("version") and string(m["version"]).trim() != "" {
+        return string(m["version"]).trim();
+    }
+    return "1.0.0";
+}
+
+public fn app_icon_of(appdir: string) -> string {
+    let m = read_manifest(appdir);
+    if not m.has("icon") {
+        return "";
+    }
+    let raw = string(m["icon"]).trim();
+    if raw == "" {
+        return "";
+    }
+    let p = if fs.is_abs_path(raw) {
+        fs.trim_slash(raw)
+    } else {
+        fs.join_dir(appdir, raw)
+    };
+    if file_exists(p) {
+        return p;
+    }
+    return "";
+}
+
+public fn app_theme_of(appdir: string) -> map {
+    let m = read_manifest(appdir);
+    let out = {
+    };
+    if not m.has("theme") or type_of(m["theme"]) != "map" {
+        return out;
+    }
+    let tm = m["theme"];
+    if tm.has("mode") and tm["mode"] != null {
+        let md = string(tm["mode"]).trim().lower();
+        if md == "light" or md == "dark" {
+            out["mode"] = md;
+        }
+    }
+    if tm.has("primary") and tm["primary"] != null {
+        let pr = string(tm["primary"]).trim();
+        if pr != "" {
+            out["primary"] = pr;
+        }
+    }
+    return out;
+}
+
+fn int_field_or(obj: map, key: string, dflt: string, minv: int) -> string {
+    if obj == null or type_of(obj) != "map" or not obj.has(key) {
+        return dflt;
+    }
+    try {
+        let v = int(obj[key]);
+        if v >= minv {
+            return string(v);
+        }
+    } catch (_e) {
+        return dflt;
+    }
+    return dflt;
+}
+
+public fn android_min_sdk_of(appdir: string) -> string {
+    let m = read_manifest(appdir);
+    if m.has("android") and type_of(m["android"]) == "map" {
+        return int_field_or(m["android"], "minSdk", "24", 16);
+    }
+    return "24";
+}
+
+public fn android_target_sdk_of(appdir: string) -> string {
+    let m = read_manifest(appdir);
+    if m.has("android") and type_of(m["android"]) == "map" {
+        return int_field_or(m["android"], "targetSdk", "34", 24);
+    }
+    return "34";
+}
+
+public fn app_version_code_of(appdir: string) -> string {
+    let m = read_manifest(appdir);
+    if m.has("android") and type_of(m["android"]) == "map" {
+        let am = m["android"];
+        if am.has("versionCode") {
+            return int_field_or(am, "versionCode", "1", 1);
+        }
+    }
+    if m.has("versionCode") {
+        return int_field_or(m, "versionCode", "1", 1);
+    }
+    return "1";
+}
+
+public fn ios_deployment_target_of(appdir: string) -> string {
+    let m = read_manifest(appdir);
+    if m.has("ios") and type_of(m["ios"]) == "map" and m["ios"].has("deploymentTarget") {
+        let raw = string(m["ios"]["deploymentTarget"]).trim();
+        let dot = fs.str_find_from(raw, ".", 0);
+        if dot > 0 {
+            raw = raw.slice(0, dot);
+        }
+        try {
+            let v = int(raw);
+            if v >= 13 and v <= 30 {
+                return string(v);
+            }
+        } catch (_e) {
+            return "17";
+        }
+    }
+    return "17";
+}
+
+public fn validate_manifest(appdir: string) -> list {
+    let issues = [];
+    let p = fs.join_dir(appdir, "studio.json");
+    if not file_exists(p) {
+        return issues;
+    }
+    let m = read_manifest(appdir);
+    if m.len() == 0 {
+        issues.push("studio.json could not be parsed as JSON object");
+        return issues;
+    }
+    if not m.has("name") or string(m["name"]).trim() == "" {
+        issues.push("studio.json 'name' is empty");
+    }
+    if m.has("icon") and string(m["icon"]).trim() != "" and app_icon_of(appdir) == "" {
+        issues.push("studio.json 'icon' file not found: " + string(m["icon"]));
+    }
+    if m.has("theme") {
+        if type_of(m["theme"]) != "map" {
+            issues.push("studio.json 'theme' must be an object");
+        } elif m["theme"].has("mode") {
+            let md = string(m["theme"]["mode"]).trim().lower();
+            if md != "light" and md != "dark" {
+                issues.push("studio.json 'theme.mode' must be 'light' or 'dark'");
+            }
+        }
+    }
+    if m.has("android") {
+        if type_of(m["android"]) != "map" {
+            issues.push("studio.json 'android' must be an object");
+        } else {
+            let am = m["android"];
+            for k in ["minSdk", "targetSdk", "versionCode"] {
+                if am.has(k) {
+                    try {
+                        let _n = int(am[k]);
+                    } catch (_e) {
+                        issues.push("studio.json 'android." + k + "' must be an integer");
+                    }
+                }
+            }
+        }
+    }
+    return issues;
+}

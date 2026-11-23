@@ -1,0 +1,197 @@
+// cli/DevWeb.matrix
+// Built-in pure-Spid3r HTTP dev server with file watcher for `studio dev --target web`.
+
+import "Fs" as fs;
+
+fn mime_for(path: string) -> string {
+    let ext = fs.file_ext(path);
+    if ext == "html" or ext == "htm" {
+        return "text/html; charset=utf-8";
+    }
+    if ext == "js" or ext == "mjs" {
+        return "application/javascript; charset=utf-8";
+    }
+    if ext == "wasm" {
+        return "application/wasm";
+    }
+    if ext == "css" {
+        return "text/css; charset=utf-8";
+    }
+    if ext == "json" {
+        return "application/json; charset=utf-8";
+    }
+    if ext == "svg" {
+        return "image/svg+xml";
+    }
+    if ext == "png" {
+        return "image/png";
+    }
+    if ext == "jpg" or ext == "jpeg" {
+        return "image/jpeg";
+    }
+    if ext == "matrix" {
+        return "text/plain; charset=utf-8";
+    }
+    return "application/octet-stream";
+}
+
+fn parse_req_path(raw: string) -> string {
+    let lines = raw.split("\n");
+    if lines.len() == 0 {
+        return "index.html";
+    }
+    let first = string(lines[0]).trim();
+    let parts = first.split(" ");
+    if parts.len() < 2 {
+        return "index.html";
+    }
+    let target = string(parts[1]).trim();
+    let q = fs.str_find_from(target, "?", 0);
+    if q >= 0 {
+        target = target.slice(0, q);
+    }
+    if target == "" or target == "/" {
+        return "index.html";
+    }
+    while target.starts_with("/") {
+        target = target.slice(1, target.len());
+    }
+    if target == "" {
+        return "index.html";
+    }
+    if target.contains("..") or target.contains("\\") {
+        return "";
+    }
+    return target;
+}
+
+fn send_not_found(conn) {
+    let body = "404 Not Found";
+    let hdr = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: "
+    + string(body.len()) + "\r\nConnection: close\r\n\r\n";
+    tcp_write(conn, hdr + body);
+    tcp_close(conn);
+}
+
+fn handle_conn(conn, web_dir: string) {
+    let req_r = tcp_read(conn, 4096);
+    if req_r.is_err() {
+        tcp_close(conn);
+        return;
+    }
+    let req_txt = string(req_r.unwrap());
+    if req_txt.trim() == "" {
+        tcp_close(conn);
+        return;
+    }
+    let rel = parse_req_path(req_txt);
+    if rel == "" {
+        send_not_found(conn);
+        return;
+    }
+    let fpath = fs.join_dir(web_dir, rel);
+    if not is_file(fpath) {
+        println("[http] 404 /" + rel);
+        send_not_found(conn);
+        return;
+    }
+    let br = read_bytes(fpath);
+    if br.is_err() {
+        send_not_found(conn);
+        return;
+    }
+    let raw = br.unwrap();
+    let hdr = "HTTP/1.1 200 OK\r\nContent-Type: " + mime_for(fpath)
+    + "\r\nCache-Control: no-store\r\nContent-Length: " + string(raw.len())
+    + "\r\nConnection: close\r\n\r\n";
+    tcp_write(conn, hdr);
+    tcp_write_bytes(conn, raw);
+    tcp_close(conn);
+    println("[http] 200 /" + rel);
+}
+
+public fn cmd_dev_web(
+    appdir: string,
+    host: string,
+    port: string,
+    once: bool,
+    rebuild_fn
+) -> int {
+    let rc = rebuild_fn();
+    if rc != 0 {
+        return rc;
+    }
+    let clean_dir = fs.trim_slash(appdir);
+    let web_dir = fs.join_dir(clean_dir, "build/web");
+    let bind_host = host.trim();
+    if bind_host == "" {
+        bind_host = "127.0.0.1";
+    }
+    let p = port.trim();
+    if p == "" {
+        p = "8080";
+    }
+    let url_host = if bind_host == "0.0.0.0" {
+        "127.0.0.1"
+    } else {
+        bind_host
+    };
+    if once {
+        if not (
+            file_exists(fs.join_dir(web_dir, "index.html")) and file_exists(fs.join_dir(web_dir, "spid3r.wasm")) and file_exists(fs.join_dir(web_dir, "wasmworker.js"))
+        ) {
+            println("error: web build outputs missing in " + web_dir);
+            return 1;
+        }
+        println(
+            "web dev ready -> http://" + url_host + ":" + p + "/index.html (bind " + bind_host + ", once)"
+        );
+        return 0;
+    }
+
+    let addr = bind_host + ":" + p;
+    let lr = tcp_listen(addr);
+    if lr.is_err() {
+        println("error: failed to bind " + addr + ": " + string(lr.unwrap_err()));
+        return 1;
+    }
+    let srv = lr.unwrap();
+    println(
+        "serving " + web_dir + " at http://" + addr + "/index.html (local: http://" + url_host + ":" + p + "/index.html; watching for changes)"
+    );
+    if bind_host == "0.0.0.0" {
+        println(
+            "LAN access enabled — open http://<your-pc-lan-ip>:" + p + "/index.html on your phone."
+        );
+    }
+
+    spawn fn() {
+        let sig = fs.source_signature(clean_dir);
+        while true {
+            sleep_ms(500);
+            let next_sig = fs.source_signature(clean_dir);
+            if next_sig != sig {
+                sig = next_sig;
+                println("change detected — rebuilding web bundle...");
+                let brc = rebuild_fn();
+                if brc == 0 {
+                    println("rebuild complete — refresh browser to load updates.");
+                }
+            }
+        }
+    };
+
+    while true {
+        let ar = tcp_accept(srv);
+        if ar.is_err() {
+            break;
+        }
+        let c = ar.unwrap();
+        let wd = web_dir;
+        spawn fn() {
+            handle_conn(c, wd);
+        };
+    }
+    tcp_close(srv);
+    return 0;
+}

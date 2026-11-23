@@ -1,0 +1,116 @@
+// cli/BuildAndroid.matrix
+// Generates a complete Android Studio / Gradle project using WebViewAssetLoader.
+
+import "Fs" as fs;
+import "Manifest" as man;
+import "Exec" as ex;
+import "BuildWeb" as b_web;
+
+public fn build(appdir: string, outdir: string, flat: string, client_js: string) -> int {
+    fs.ensure_dir(outdir);
+    fs.setup_import_path();
+    let name = man.app_name_of(appdir);
+    let bundle_id = man.app_bundle_id_of(appdir);
+    let app_ver = man.app_version_of(appdir);
+    let ver_code = man.app_version_code_of(appdir);
+    let pkg_name = fs.sanitize_android_pkg(bundle_id);
+    let pkg_dir = pkg_name.replace(".", "/");
+
+    println("building android project -> " + outdir + "/AndroidApp");
+    let rt_assets = ex.wasm_runtime_assets(outdir + "/_runtime");
+    if rt_assets == "" {
+        return 1;
+    }
+
+    let proj = outdir + "/AndroidApp";
+    let app_dir = proj + "/app";
+    let main_dir = app_dir + "/src/main";
+    let java_dir = main_dir + "/java/" + pkg_dir;
+    let assets_dir = main_dir + "/assets";
+    fs.ensure_dir(proj);
+    fs.ensure_dir(app_dir);
+    fs.ensure_dir(app_dir + "/src");
+    fs.ensure_dir(main_dir);
+    fs.ensure_dir(java_dir);
+    fs.ensure_dir(assets_dir);
+
+    if b_web.copy_wasm_assets(rt_assets, assets_dir) != 0 {
+        return 1;
+    }
+    if not fs.copy_app_assets(appdir, assets_dir) {
+        return 1;
+    }
+
+    if not fs.write_checked(assets_dir + "/app.matrix", flat) {
+        return 1;
+    }
+    if b_web.fill_host_page(appdir, assets_dir, flat, client_js, false) != 0 {
+        return 1;
+    }
+
+    let icon_attr = "";
+    let icon_src = man.app_icon_of(appdir);
+    if icon_src != "" {
+        let ext = fs.file_ext(icon_src);
+        if ext == "png" or ext == "jpg" or ext == "jpeg" or ext == "webp" {
+            let res_dir = main_dir + "/res";
+            let draw_dir = res_dir + "/drawable";
+            fs.ensure_dir(res_dir);
+            fs.ensure_dir(draw_dir);
+            if copy_file(icon_src, draw_dir + "/ic_launcher." + ext).is_ok() {
+                icon_attr = "\n        android:icon=\"@drawable/ic_launcher\"";
+            }
+        }
+    }
+
+    let vars = {
+        "APP_NAME": name,
+        "APP_NAME_KOTLIN": fs.kotlin_str_escape(name),
+        "APP_NAME_XML": fs.html_escape(name),
+        "BUNDLE_ID": bundle_id,
+        "PACKAGE_NAME": pkg_name,
+        "APP_VERSION": app_ver,
+        "VERSION_CODE": ver_code,
+        "ANDROID_MIN_SDK": man.android_min_sdk_of(appdir),
+        "ANDROID_TARGET_SDK": man.android_target_sdk_of(appdir),
+        "APP_ICON_ATTR": icon_attr,
+    };
+
+    let t_settings = fs.render_template("targets/android/settings.gradle.kts.tmpl", vars);
+    let t_root_gradle = fs.render_template("targets/android/build.gradle.kts.tmpl", vars);
+    let t_props = fs.render_template("targets/android/gradle.properties.tmpl", vars);
+    let t_app_gradle = fs.render_template("targets/android/app.build.gradle.kts.tmpl", vars);
+    let t_manifest = fs.render_template("targets/android/AndroidManifest.xml.tmpl", vars);
+    let t_activity = fs.render_template("targets/android/MainActivity.kt.tmpl", vars);
+    let t_readme = fs.render_template("targets/android/README.md.tmpl", vars);
+    if t_settings == "" or t_root_gradle == "" or t_props == "" or t_app_gradle == "" or t_manifest == "" or t_activity == "" or t_readme == "" {
+        return 1;
+    }
+
+    if not fs.write_checked(proj + "/settings.gradle.kts", t_settings) {
+        return 1;
+    }
+    if not fs.write_checked(proj + "/build.gradle.kts", t_root_gradle) {
+        return 1;
+    }
+    if not fs.write_checked(proj + "/gradle.properties", t_props) {
+        return 1;
+    }
+    if not fs.write_checked(proj + "/README.md", t_readme) {
+        return 1;
+    }
+    if not fs.write_checked(app_dir + "/build.gradle.kts", t_app_gradle) {
+        return 1;
+    }
+    if not fs.write_checked(main_dir + "/AndroidManifest.xml", t_manifest) {
+        return 1;
+    }
+    if not fs.write_checked(java_dir + "/MainActivity.kt", t_activity) {
+        return 1;
+    }
+
+    println("done: android project in " + proj);
+    println("  package: " + pkg_name + "   applicationId: " + bundle_id + "   label: " + name);
+    println("  next: open in Android Studio, or run: gradle assembleDebug (requires Android SDK)");
+    return 0;
+}

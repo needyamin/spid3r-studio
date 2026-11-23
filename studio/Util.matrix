@@ -1,0 +1,201 @@
+// studio/Util.matrix
+// Small shared helpers. Map indexing with a missing key THROWS in spid3r,
+// so every optional property read goes through prop()/s() instead of m[k].
+
+/// Safe map read: null when the key is absent.
+public fn prop(m: map, k: string) -> any {
+    if m.has(k) {
+        return m[k];
+    }
+    return null;
+}
+
+/// Safe map read as string: "" when absent or null.
+public fn s(m: map, k: string) -> string {
+    let v = prop(m, k);
+    if v == null {
+        return "";
+    }
+    return string(v);
+}
+
+/// Coerce a value to string with "" for null.
+public fn sval(v) -> string {
+    if v == null {
+        return "";
+    }
+    return string(v);
+}
+
+/// Safe int read with default.
+public fn ival(m: map, k: string, dflt: int = 0) -> int {
+    let v = prop(m, k);
+    if v == null {
+        return dflt;
+    }
+    try {
+        return int(v);
+    } catch (_e) {
+        return dflt;
+    }
+}
+
+/// Safe float read with default.
+public fn fval(m: map, k: string, dflt: float = 0.0) -> float {
+    let v = prop(m, k);
+    if v == null {
+        return dflt;
+    }
+    try {
+        return float(v);
+    } catch (_e) {
+        return dflt;
+    }
+}
+
+/// HTML-escape text content.
+public fn esc(s: string) -> string {
+    let t = string(s);
+    t = t.replace("&", "&amp;");
+    t = t.replace("<", "&lt;");
+    t = t.replace(">", "&gt;");
+    return t;
+}
+
+/// HTML-escape attribute values.
+public fn esc_attr(s: string) -> string {
+    let t = esc(s);
+    t = t.replace("\"", "&quot;");
+    t = t.replace("'", "&#39;");
+    return t;
+}
+
+fn is_digit_ch(c: string) -> bool {
+    return c >= "0" and c <= "9";
+}
+
+fn is_hex_ch(c: string) -> bool {
+    return is_digit_ch(c) or (c >= "a" and c <= "f") or (c >= "A" and c <= "F");
+}
+
+/// Allow safe image/link URLs (http, https, appstudio, raster data:image, relative).
+public fn safe_url(raw: string) -> string {
+    let t = string(raw).trim();
+    if t == "" {
+        return "";
+    }
+    let low = t.lower().replace(" ", "").replace("\t", "").replace("\n", "").replace("\r", "");
+    if low.starts_with("//") {
+        return "";
+    }
+    if low.starts_with("https://") or low.starts_with("http://") or low.starts_with("appstudio://") {
+        return t;
+    }
+    if low.starts_with("data:image/") and not low.starts_with("data:image/svg") {
+        return t;
+    }
+    if low.starts_with("/") or low.starts_with("./") or low.starts_with("../") {
+        return t;
+    }
+    let i = 0;
+    let n = low.len();
+    while i < n {
+        let ch = low[i];
+        if ch == ":" {
+            return "";
+        }
+        if ch == "/" or ch == "?" or ch == "#" {
+            break;
+        }
+        i += 1;
+    }
+    return t;
+}
+
+/// Escape icon HTML while preserving valid numeric entities (&#123; / &#x1F;).
+public fn esc_icon(raw: string) -> string {
+    let s = string(raw);
+    let out = "";
+    let n = s.len();
+    let i = 0;
+    while i < n {
+        let c = s[i];
+        if c == "<" {
+            out += "&lt;";
+            i += 1;
+            continue;
+        }
+        if c == ">" {
+            out += "&gt;";
+            i += 1;
+            continue;
+        }
+        if c == "\"" {
+            out += "&quot;";
+            i += 1;
+            continue;
+        }
+        if c == "'" {
+            out += "&#39;";
+            i += 1;
+            continue;
+        }
+        if c == "&" {
+            if i + 3 < n and s[i + 1] == "#" {
+                let is_hex = s[i + 2] == "x" or s[i + 2] == "X";
+                let j = i + 2;
+                let max_len = 7;
+                if is_hex {
+                    j = i + 3;
+                    max_len = 6;
+                }
+                let digits = 0;
+                while j < n and digits < max_len {
+                    let dc = s[j];
+                    let ok_ch = false;
+                    if is_hex {
+                        ok_ch = is_hex_ch(dc);
+                    } else {
+                        ok_ch = is_digit_ch(dc);
+                    }
+                    if not ok_ch {
+                        break;
+                    }
+                    digits += 1;
+                    j += 1;
+                }
+                if digits > 0 and j < n and s[j] == ";" {
+                    out += s.slice(i, j + 1);
+                    i = j + 1;
+                    continue;
+                }
+            }
+            out += "&amp;";
+            i += 1;
+            continue;
+        }
+        out += c;
+        i += 1;
+    }
+    return out;
+}
+
+/// Sanitize a CSS variable value against breakout characters and CSS functions.
+public fn esc_css_val(raw: string) -> string {
+    let s = string(raw);
+    let out = "";
+    let i = 0;
+    let n = s.len();
+    while i < n {
+        let c = s[i];
+        if c != ";" and c != "{" and c != "}" and c != "<" and c != ">" and c != "\n" and c != "\r" and c != "\\" {
+            out += c;
+        }
+        i += 1;
+    }
+    let low = out.lower();
+    if low.contains("expression(") or low.contains("javascript:") or low.contains("url(") {
+        return "";
+    }
+    return out;
+}

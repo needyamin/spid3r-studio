@@ -1,0 +1,122 @@
+// examples/demo/pages/Home.matrix
+// Tasks list tab with segmented filter, keyed list morphing, form submit, toast, and confirm modal.
+
+import "studio/Components" as ui;
+import "studio/State" as state;
+import "studio/Storage" as storage;
+import "studio/Router" as nav;
+
+fn task_tile(item, i) -> map {
+    let done = item.has("done") and item["done"] == true;
+    let tid = if item.has("id") {
+        string(item["id"])
+    } else {
+        "row-" + string(i)
+    };
+    let prio = if item.has("priority") {
+        string(item["priority"])
+    } else {
+        "medium"
+    };
+    let idx = i;
+    return ui.row([ui.toggle(done, (_ev) => {
+        let t = state.get_list("tasks");
+        t[idx]["done"] = not (t[idx]["done"] == true);
+        state.set("tasks", t);
+        storage.set("tasks", t);
+    }, {
+        "aria_label": "Toggle task"
+    }), ui.column([ui.text(string(item["title"]), if done {
+        "tile-title done"
+    } else {
+        "tile-title"
+    }), ui.caption("Priority: " + prio),], {
+        "flex": 1, "onTap": (_ev) => nav.push("Detail", {
+            "idx": idx
+        })
+    }), ui.iconbutton("&#128465;", (_ev) => {
+        let t = state.get_list("tasks");
+        t.remove_at(idx);
+        state.set("tasks", t);
+        storage.set("tasks", t);
+        state.set("toast_msg", "Task removed");
+    }, "surface", {
+        "aria_label": "Delete task"
+    }),], {
+        "key": tid,
+        "gap": 10,
+        "cls": "tile",
+        "style": "border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;background:var(--surface);",
+    });
+}
+
+public fn Home() -> map {
+    let tasks = state.get_list("tasks");
+    let filt = string(state.get_or("filter", "0"));
+    let filter_idx = 0;
+    if filt == "1" {
+        filter_idx = 1;
+    } elif filt == "2" {
+        filter_idx = 2;
+    }
+
+    let kids = [
+    ui.navbar("Tasks", [ui.badge(string(tasks.len()), "primary")]),
+    ui.form([ui.row([ui.input("What needs doing?", (_ev) => {
+        state.set("draft", string(_ev["value"]));
+    }, string(state.get_or("draft", "")), "text", {
+        "id": "draft-input", "flex": 1
+    }), ui.button("Add", "add_task"),], {
+        "gap": 10
+    }),], "add_task"),
+    ui.spacer(6),
+    ui.segmented(["All", "Active", "Done"], filter_idx, (_ev) => {
+        state.set("filter", string(_ev["arg"]));
+    }),
+    ui.spacer(8),
+    ];
+
+    let visible = [];
+    let orig_indices = [];
+    let i = 0;
+    for t in tasks {
+        let is_done = t.has("done") and t["done"] == true;
+        if filter_idx == 0 or (filter_idx == 1 and not is_done) or (filter_idx == 2 and is_done) {
+            visible.push(t);
+            orig_indices.push(i);
+        }
+        i += 1;
+    }
+
+    if visible.len() == 0 {
+        kids.push(ui.empty("&#128203;", "No tasks shown", "Add one above or switch filters."));
+    } else {
+        let j = 0;
+        let rows = [];
+        while j < visible.len() {
+            rows.push(task_tile(visible[j], orig_indices[j]));
+            j += 1;
+        }
+        kids.push(ui.column(rows, {
+            "gap": 8
+        }));
+    }
+
+    let tmsg = string(state.get_or("toast_msg", ""));
+    if tmsg != "" {
+        kids.push(ui.toast(tmsg, "info", "dismiss_toast"));
+    }
+    if state.get_or("confirm_clear", false) == true {
+        kids.push(
+            ui.confirm(
+                "Clear completed tasks?",
+                "Completed tasks will be permanently removed.",
+                "confirm_clear",
+                "cancel_clear",
+                "Clear",
+                "Cancel"
+            )
+        );
+    }
+    return ui.page(kids);
+}

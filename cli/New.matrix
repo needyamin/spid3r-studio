@@ -1,0 +1,109 @@
+// cli/New.matrix
+// Scaffold a new self-contained AppStudio project from templates/starter/.
+
+import "Fs" as fs;
+
+public fn cmd_new(name: string, outdir: string) -> int {
+    if name == "" {
+        println("error: new requires an app name");
+        return 2;
+    }
+    let dir = outdir;
+    if dir == "" {
+        dir = name;
+    }
+    dir = fs.trim_slash(dir);
+    if file_exists(dir) and not is_dir(dir) {
+        println("error: " + dir + " exists and is not a directory");
+        return 2;
+    }
+    let mk = dir_create(dir);
+    if mk.is_err() {
+        println("error: cannot create " + dir + ": " + string(mk.unwrap_err()));
+        return 2;
+    }
+    dir_create(dir + "/pages");
+    dir_create(dir + "/targets");
+    dir_create(dir + "/storage");
+
+    // vendor only runtime framework modules from studio/
+    let root = fs.fw_root();
+    dir_create(dir + "/vendor");
+    dir_create(dir + "/vendor/studio");
+    let ld = list_dir(fs.join_dir(root, "studio"));
+    if ld.is_err() {
+        println(
+            "error: cannot read framework studio/ (set APPSTUDIO_HOME or run from AppStudio root)"
+        );
+        return 2;
+    }
+    for f in ld.unwrap() {
+        let fname = string(f);
+        if fname.ends_with(".matrix") {
+            let cp = copy_file(
+                fs.join_dir(root, "studio/" + fname),
+                dir + "/vendor/studio/" + fname
+            );
+            if cp.is_err() {
+                println("error: vendoring " + fname + " failed: " + string(cp.unwrap_err()));
+                return 2;
+            }
+        }
+    }
+    let host_cp = copy_file(
+        fs.join_dir(root, "targets/host.html"),
+        dir + "/targets/host.html"
+    );
+    if host_cp.is_err() {
+        println("error: copying host page failed: " + string(host_cp.unwrap_err()));
+        return 2;
+    }
+
+    let bundle_id = "com.example." + string(name).lower().replace(" ", "");
+    let manifest = {
+        "name": name,
+        "bundleID": bundle_id,
+        "version": "0.1.0",
+        "entry": "main.matrix",
+    };
+    if not fs.write_checked(dir + "/studio.json", json_write(manifest)) {
+        return 1;
+    }
+
+    let vars = {
+        "APP_NAME": name,
+        "BUNDLE_ID": bundle_id,
+        "APP_DIR": dir,
+    };
+    let t_toml = fs.render_template("templates/starter/spider.toml.tmpl", vars);
+    let t_app = fs.render_template("templates/starter/app.matrix.tmpl", vars);
+    let t_main = fs.render_template("templates/starter/main.matrix.tmpl", vars);
+    let t_readme = fs.render_template("templates/starter/README.md.tmpl", vars);
+    if t_toml == "" or t_app == "" or t_main == "" or t_readme == "" {
+        return 1;
+    }
+    if not fs.write_checked(dir + "/spider.toml", t_toml) {
+        return 1;
+    }
+    if not fs.write_checked(dir + "/app.matrix", t_app) {
+        return 1;
+    }
+    if not fs.write_checked(dir + "/main.matrix", t_main) {
+        return 1;
+    }
+    if not fs.write_checked(dir + "/README.md", t_readme) {
+        return 1;
+    }
+
+    println("created " + dir + "/");
+    println("  app.matrix          author file (pages + handlers + studio_app)");
+    println("  main.matrix         native entry (GUI shims + run)");
+    println("  vendor/studio/      the AppStudio runtime framework");
+    println("  targets/host.html   webview host page");
+    println("  studio.json         manifest (name, bundleID, version)");
+    println("");
+    println("Next:");
+    println("  spid3r run studio.matrix run " + dir);
+    println("  spid3r run studio.matrix dev " + dir);
+    return 0;
+}

@@ -1,0 +1,124 @@
+// cli/Exec.matrix
+// Subprocess helpers, toolchain version probing, and cached wasm runtime extraction.
+
+import "Fs" as fs;
+
+public fn flush_child_output(m: map) {
+    let out = string(m["stdout"]);
+    let err = string(m["stderr"]);
+    if out != "" {
+        print(out);
+    }
+    if err != "" {
+        print(err);
+    }
+}
+
+public fn run_checked(cmd: string, args: list, err_prefix: string) -> bool {
+    let r = exec_capture(cmd, args, null);
+    if r.is_err() {
+        println("error " + err_prefix + ": " + string(r.unwrap_err()));
+        return false;
+    }
+    let m = r.unwrap();
+    if int(m["code"]) != 0 {
+        println(
+            "error " + err_prefix + ":\n" + string(m["stdout"]) + string(m["stderr"])
+        );
+        return false;
+    }
+    return true;
+}
+
+public fn probe_version(cmd: string, args: list) -> string {
+    let r = exec_capture(cmd, args, null);
+    if r.is_err() {
+        return "";
+    }
+    let m = r.unwrap();
+    if int(m["code"]) != 0 {
+        return "";
+    }
+    let s = string(m["stdout"]);
+    if s.trim() == "" {
+        s = string(m["stderr"]);
+    }
+    let line = s.split("\n");
+    let i = 0;
+    while i < line.len() {
+        let t = string(line[i]).trim();
+        if t != "" and not t.starts_with("█") and not t.starts_with("╱") and not t.starts_with("╚") {
+            return t;
+        }
+        i += 1;
+    }
+    return "";
+}
+
+public fn probe_spid3r_version() -> string {
+    let r = exec_capture("spid3r", ["version"], null);
+    if r.is_err() or int(r.unwrap()["code"]) != 0 {
+        return "";
+    }
+    let s = string(r.unwrap()["stdout"]);
+    for row in s.split("\n") {
+        let t = string(row).trim();
+        if t.starts_with("Version") {
+            let parts = t.split(" ");
+            let k = parts.len() - 1;
+            while k >= 0 {
+                let p = string(parts[k]).trim();
+                if p != "" and p != "Version" {
+                    return p;
+                }
+                k -= 1;
+            }
+        }
+    }
+    return probe_version("spid3r", ["--version"]);
+}
+
+/// Provide spid3r.js + spid3r.wasm, caching once under <fw_root>/.studio-cache/<version>/.
+public fn wasm_runtime_assets(tmpdir: string) -> string {
+    let ver = probe_spid3r_version();
+    if ver == "" {
+        ver = "default";
+    }
+    let cache_root = fs.join_dir(fs.fw_root(), ".studio-cache");
+    let cache_dir = fs.join_dir(cache_root, ver);
+    if file_exists(cache_dir + "/spid3r.js") and file_exists(cache_dir + "/spid3r.wasm") {
+        return cache_dir;
+    }
+
+    fs.ensure_dir(tmpdir);
+    let stub = tmpdir + "/_bundlestub.matrix";
+    write_file(stub, "fn main() -> int {\n    return 0;\n}\n");
+    let proj = tmpdir + "/rt";
+    if not run_checked(
+        "spid3r",
+        ["bundle",
+        stub,
+        "--target",
+        "android",
+        "-o",
+        proj],
+        "runtime bundling failed"
+    ) {
+        return "";
+    }
+    let assets = proj + "/app/src/main/assets";
+    if not (file_exists(assets + "/spid3r.js") and file_exists(assets + "/spid3r.wasm")) {
+        println("error: runtime assets missing after bundle");
+        return "";
+    }
+
+    fs.ensure_dir(cache_root);
+    fs.ensure_dir(cache_dir);
+    let cj = copy_file(assets + "/spid3r.js", cache_dir + "/spid3r.js");
+    let cw = copy_file(assets + "/spid3r.wasm", cache_dir + "/spid3r.wasm");
+    if cj.is_ok() and cw.is_ok() {
+        dir_remove(tmpdir);
+        return cache_dir;
+    }
+    return assets;
+}

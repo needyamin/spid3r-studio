@@ -1,0 +1,74 @@
+// cli/Doctor.matrix
+// Toolchain diagnostics for spid3r, iOS (xtool/swift), and Android (java/gradle/adb/SDK).
+
+import "Exec" as ex;
+
+public fn cmd_doctor() -> int {
+    println("AppStudio doctor");
+    println("----------------");
+    let ok_all = true;
+
+    let v = ex.probe_spid3r_version();
+    if v == "" {
+        println("[x] spid3r        NOT FOUND on PATH");
+        ok_all = false;
+    } else {
+        println("[ok] spid3r       " + v);
+    }
+
+    let x = ex.probe_version("xtool", ["--version"]);
+    if x == "" {
+        println("[!] xtool         not found (needed only for the iOS target)");
+        println("    install: https://xtool.sh/documentation/xtooldocs/installation-windows");
+    } else {
+        println("[ok] xtool        " + x);
+    }
+
+    let sw = ex.probe_version("swift", ["--version"]);
+    if sw == "" {
+        println(
+            "[!] swift         not found (optional; xtool includes Swift packaging on Linux/macOS/Windows)"
+        );
+    } else {
+        println("[ok] swift        " + sw);
+    }
+
+    let j = ex.probe_version("java", ["-version"]);
+    if j == "" {
+        println("[!] java          not found (needed by Gradle/Android builds)");
+    } else {
+        println("[ok] java         " + j);
+    }
+
+    let gr = ex.probe_version("gradle", ["--version"]);
+    if gr == "" {
+        println("[!] gradle        not found on PATH (Android Studio includes its own Gradle)");
+    } else {
+        println("[ok] gradle       " + gr);
+    }
+
+    let adb = ex.probe_version("adb", ["version"]);
+    if adb == "" {
+        println("[!] adb           not found (Android platform-tools)");
+    } else {
+        println("[ok] adb          " + adb);
+    }
+
+    let ah = env("ANDROID_HOME");
+    let asdk = env("ANDROID_SDK_ROOT");
+    if string(ah) != "none" and string(ah.unwrap()).trim() != "" {
+        println("[ok] ANDROID_HOME " + string(ah.unwrap()));
+    } elif string(asdk) != "none" and string(asdk.unwrap()).trim() != "" {
+        println("[ok] ANDROID_SDK  " + string(asdk.unwrap()));
+    } else {
+        println("[!] ANDROID_HOME  not set (required for command-line Android APK builds)");
+    }
+
+    println("");
+    if ok_all {
+        println("core toolchain ready — run: spid3r run studio.matrix new MyApp");
+        return 0;
+    }
+    println("error: core spid3r toolchain missing.");
+    return 1;
+}

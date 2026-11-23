@@ -1,0 +1,12 @@
+# {{APP_NAME}}
+
+AppStudio app (self-contained: the framework is vendored).
+
+From the AppStudio framework root:
+
+    spid3r run studio.matrix run {{APP_DIR}}        # native webview
+    spid3r run studio.matrix dev {{APP_DIR}}        # hot reload
+    spid3r run studio.matrix build {{APP_DIR}} --target web     # browser bundle
+    spid3r run studio.matrix build {{APP_DIR}} --target android # Android Studio project
+    spid3r run studio.matrix build {{APP_DIR}} --target ios     # xtool package (no Mac needed)
+    spid3r run studio.matrix build {{APP_DIR}} --target desktop # single executable

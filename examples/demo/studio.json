@@ -1,0 +1,19 @@
+{
+  "name": "Studio Demo",
+  "bundleID": "sh.appstudio.demo",
+  "version": "1.0.0",
+  "entry": "main.matrix",
+  "icon": "assets/logo.svg",
+  "theme": {
+    "mode": "light",
+    "primary": "#4f46e5"
+  },
+  "android": {
+    "minSdk": 24,
+    "targetSdk": 34,
+    "versionCode": 1
+  },
+  "ios": {
+    "deploymentTarget": "17"
+  }
+}

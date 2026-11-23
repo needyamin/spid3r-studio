@@ -1,0 +1,167 @@
+// studio/Http.matrix
+// Network wrapper over http_fetch (native) and the unified Host Effects protocol (web/mobile)
+// with a uniform response shape:
+//   {"ok": bool, "status": int, "body": string, "json": any|null, "error": string}
+
+import "Bridge" as br;
+import "Util" as U;
+
+let async_seq = 0;
+
+fn wrap(status: int, body: string, err: string = "") -> map {
+    let r = {
+        "ok": status >= 200 and status < 300, "status": status, "body": body, "json": null, "error": err
+    };
+    if err == "" and body.trim() != "" {
+        try {
+            r["json"] = json_parse(body);
+        } catch (_e) {
+            r["json"] = null;
+        }
+    }
+    return r;
+}
+
+fn net_err(msg: string) -> map {
+    return {
+        "ok": false, "status": 0, "body": "", "json": null, "error": msg
+    };
+}
+
+fn is_safe_http_url(url: string) -> bool {
+    let t = url.trim();
+    if t == "" {
+        return false;
+    }
+    let low = t.lower();
+    if low.starts_with("https://") or low.starts_with("http://") {
+        return U.safe_url(t) != "";
+    }
+    if low.starts_with("/") and not low.starts_with("//") {
+        return true;
+    }
+    return false;
+}
+
+fn merge_json_headers(headers: map) -> map {
+    let h = {
+        "Content-Type": "application/json"
+    };
+    for (k, v) in headers {
+        h[k] = v;
+    }
+    return h;
+}
+
+public fn request(method: string, url: string, headers: map = {
+}, body: string = "") -> map {
+    let r = null;
+    try {
+        r = http_fetch(method, url, headers, body, null);
+    } catch (_e) {
+        return net_err("network unavailable in this runtime");
+    }
+    if r == null {
+        return net_err("network unavailable in this runtime");
+    }
+    if r.is_err() {
+        return net_err(string(r.unwrap_err()));
+    }
+    let m = r.unwrap();
+    return wrap(int(m["status"]), string(m["body"]));
+}
+
+public fn get(url: string, headers: map = {
+}) -> map {
+    return request("GET", url, headers);
+}
+
+public fn post_json(url: string, payload, headers: map = {
+}) -> map {
+    return request("POST", url, merge_json_headers(headers), json_write(payload));
+}
+
+public fn put_json(url: string, payload, headers: map = {
+}) -> map {
+    return request("PUT", url, merge_json_headers(headers), json_write(payload));
+}
+
+public fn del(url: string, headers: map = {
+}) -> map {
+    return request("DELETE", url, headers);
+}
+
+/// Dispatch an HTTP request asynchronously.
+/// On web/mobile, enqueues an "http" host effect using cb as a handler sid.
+/// On native desktop, runs request() and invokes cb(response).
+public fn request_async(method: string, url: string, headers: map = {
+}, body: string = "", cb = null) -> bool {
+    if not is_safe_http_url(url) or cb == null {
+        return false;
+    }
+    async_seq += 1;
+    let req_id = "http" + string(async_seq);
+    let clean_url = url.trim();
+    if br.platform() != "native" {
+        let cb_sid = "";
+        if type_of(cb) == "string" {
+            cb_sid = string(cb);
+        } else {
+            cb_sid = br.slot(cb);
+        }
+        if cb_sid == "" {
+            return false;
+        }
+        br.enqueue_effect({
+            "kind": "http",
+            "req_id": req_id,
+            "method": method.upper(),
+            "url": clean_url,
+            "headers": headers,
+            "body": body,
+            "cb": cb_sid,
+        });
+        return true;
+    }
+    let res = request(method, clean_url, headers, body);
+    let ev = {
+        "kind": "http",
+        "req_id": req_id,
+        "ok": res["ok"],
+        "status": res["status"],
+        "body": res["body"],
+        "json": res["json"],
+        "error": res["error"],
+        "response": res,
+        "value": res["body"],
+    };
+    if type_of(cb) == "string" {
+        let h = br.lookup(string(cb));
+        if h != null {
+            h(ev);
+        }
+    } else {
+        cb(ev);
+    }
+    return true;
+}
+
+public fn get_async(url: string, cb, headers: map = {
+}) -> bool {
+    return request_async("GET", url, headers, "", cb);
+}
+
+public fn post_json_async(url: string, payload, cb, headers: map = {
+}) -> bool {
+    return request_async("POST", url, merge_json_headers(headers), json_write(payload), cb);
+}
+
+public fn put_json_async(url: string, payload, cb, headers: map = {
+}) -> bool {
+    return request_async("PUT", url, merge_json_headers(headers), json_write(payload), cb);
+}
+
+public fn del_async(url: string, cb, headers: map = {
+}) -> bool {
+    return request_async("DELETE", url, headers, "", cb);
+}

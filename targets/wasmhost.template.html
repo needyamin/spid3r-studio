@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob: https: http: appstudio:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http: appstudio:; object-src 'none'; base-uri 'none';">
+<title>{{APP_TITLE}}</title>
+{{APP_ICON_TAG}}
+{{APP_PWA_TAGS}}
+<style>
+html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
+#studio-busy{position:fixed;top:0;left:0;right:0;height:3px;z-index:10000;pointer-events:none;opacity:0;transition:opacity 120ms ease;background:linear-gradient(90deg,transparent,var(--primary,#4f46e5),transparent);background-size:40% 100%;background-repeat:no-repeat;animation:studio-busy-slide 1s linear infinite;}
+#studio-busy.on{opacity:1;}
+@keyframes studio-busy-slide{0%{background-position:-40% 0;}100%{background-position:140% 0;}}
+#studio-boot{position:fixed;inset:auto 0 0 0;padding:10px 14px;font:12px/1.5 ui-monospace,monospace;background:#0b0f17;color:#7dd3fc;white-space:pre-wrap;z-index:9999;display:none;}
+</style>
+</head>
+<body>
+<div id="spid3r-root"></div>
+<div id="studio-busy" aria-hidden="true"></div>
+<div id="studio-boot">booting studio runtime…</div>
+<script src="spid3r.js"></script>
+<script>
+// ===== AppStudio wasm host (worker-backed stateless REPL protocol) =====
+// Evaluates app source + driver inside wasmworker.js (with main-thread fallback),
+// passing state/router/storage/theme/caps in and applying atomic @@STUDIO_FRAME@@ updates out.
+(function() {
+  var bootBox = document.getElementById('studio-boot');
+  var busyBar = document.getElementById('studio-busy');
+  var busyTimer = null;
+  function bootLog(s) { bootBox.style.display = 'block'; bootBox.textContent = s; }
+  function bootHide() { bootBox.style.display = 'none'; }
+  function showBusyDelayed() {
+    clearTimeout(busyTimer);
+    busyTimer = setTimeout(function() {
+      if (busyBar) { busyBar.classList.add('on'); }
+    }, 120);
+  }
+  function hideBusy() {
+    clearTimeout(busyTimer);
+    busyTimer = null;
+    if (busyBar) { busyBar.classList.remove('on'); }
+  }
+
+  var APP_SOURCE_JSON = {{APP_SOURCE_JSON}};     // null => fetch("app.matrix")
+  var APP_BUNDLE_ID = {{APP_BUNDLE_ID_JSON}};
+  var APP_THEME_JSON = {{APP_THEME_JSON}};
+  var STORAGE_KEY = 'studio:storage:' + String(APP_BUNDLE_ID || 'default');
+  var THEME_KEY = 'studio:theme:' + String(APP_BUNDLE_ID || 'default');
+
+  function readLocalJson(key) {
+    try {
+      if (typeof localStorage === 'undefined') { return null; }
+      var raw = localStorage.getItem(key);
+      if (!raw) { return null; }
+      var parsed = JSON.parse(raw);
+      return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  function writeLocalJson(key, val) {
+    try {
+      if (typeof localStorage === 'undefined') { return; }
+      if (val && typeof val === 'object' && !Array.isArray(val)) {
+        localStorage.setItem(key, JSON.stringify(val));
+      } else {
+        localStorage.removeItem(key);
+      }
+    } catch (_e) {}
+  }
+
+  var envelope = {
+    router: null,
+    state: null,
+    storage: readLocalJson(STORAGE_KEY),
+    theme: readLocalJson(THEME_KEY) || APP_THEME_JSON
+  };
+  var themeVersion = 0;
+  var eventQueue = [];
+  var busy = false;
+  var sp = null;
+  var appSrc = '';
+  var worker = null;
+  var workerReady = false;
+  var reqSeq = 0;
+  var workerCallbacks = Object.create(null);
+
+  window.ipc = {
+    postMessage: function(msgStr) {
+      var parsed = null;
+      try { parsed = JSON.parse(msgStr); } catch (_e) { return; }
+      if (!parsed || parsed.event !== 'ui') { return; }
+      var payload = parsed.payload;
+      if (typeof payload === 'string') {
+        try { payload = JSON.parse(payload); } catch (_e2) {}
+      }
+      if (!payload || typeof payload !== 'object') { return; }
+      eventQueue.push(payload);
+      drainQueue();
+    }
+  };
+
+  window.__studioBack = function() {
+    var depth = (envelope.router && envelope.router.stacks && envelope.router.tabs)
+      ? (function() {
+          var t = String(envelope.router.tab || '');
+          var st = envelope.router.stacks[t];
+          return Array.isArray(st) ? st.length : 1;
+        })()
+      : 1;
+    if (depth <= 1) { return false; }
+    eventQueue.push({ sid: '__studio_back__', kind: 'back', value: null, arg: null });
+    drainQueue();
+    return true;
+  };
+
+  function detectPlatform() {
+    try {
+      if (typeof location !== 'undefined') {
+        if (location.protocol === 'appstudio:') { return 'ios'; }
+        if (location.hostname === 'appassets.androidplatform.net') { return 'android'; }
+      }
+    } catch (_e) {}
+    return 'web';
+  }
+
+  function currentCaps() {
+    var dark = false;
+    try {
+      dark = !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    } catch (_e) {}
+    return {
+      platform: detectPlatform(),
+      prefers_dark: dark,
+      viewport_width: (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : 0
+    };
+  }
+
+  function spid3rLiteral(s) {
+    return '"' + String(s)
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, '\\n')
+      .replace(/\r/g, '\\r')
+      .replace(/\t/g, '\\t')
+      .replace(/\{/g, '\\{')
+      .replace(/\}/g, '\\}')
+      .replace(/\u2028/g, '\\u2028')
+      .replace(/\u2029/g, '\\u2029') + '"';
+  }
+
+  function buildEnvelopeJson(evPayload) {
+    return JSON.stringify({
+      event: evPayload,
+      router: envelope.router,
+      state: envelope.state,
+      storage: envelope.storage,
+      theme: envelope.theme,
+      theme_version: themeVersion,
+      caps: currentCaps()
+    });
+  }
+
+  function finishEval(res, errMsg) {
+    hideBusy();
+    if (errMsg) {
+      bootLog('studio error: ' + errMsg);
+    } else if (!res || !res.ok) {
+      var r = res || {};
+      bootLog('app error: ' + (r.error || r.thrown || 'unknown') + (r.line ? (' @' + r.line + ':' + r.col) : ''));
+    } else {
+      bootHide();
+      applyProtocol(String(res.stdout || ''));
+    }
+    busy = false;
+    if (eventQueue.length > 0) { setTimeout(drainQueue, 0); }
+  }
+
+  function runInWorker(evJson) {
+    var id = ++reqSeq;
+    workerCallbacks[id] = function(res, errMsg) {
+      finishEval(res, errMsg);
+    };
+    worker.postMessage({ id: id, type: 'eval', evJson: evJson });
+  }
+
+  function runOnMainThread(evJson) {
+    var src = appSrc.replace('let STUDIO_EVENT_JSON = "";', function() {
+      return 'let STUDIO_EVENT_JSON = ' + spid3rLiteral(evJson) + ';';
+    });
+    try {
+      var res = sp.eval(src, 'vm');
+      finishEval(res, null);
+    } catch (e) {
+      finishEval(null, e && e.message ? e.message : String(e));
+    }
+  }
+
+  function drainQueue() {
+    if (busy || eventQueue.length === 0) { return; }
+    if (!workerReady && !sp) { return; }
+    busy = true;
+    showBusyDelayed();
+    var evPayload = eventQueue.shift();
+    var evJson = buildEnvelopeJson(evPayload);
+    if (worker && workerReady) {
+      runInWorker(evJson);
+    } else {
+      runOnMainThread(evJson);
+    }
+  }
+
+  function applyProtocol(stdout) {
+    var lines = stdout.split(/\r?\n/);
+    var frame = null;
+    for (var i = 0; i < lines.length - 1; i++) {
+      if (lines[i] === '@@STUDIO_FRAME@@') {
+        try {
+          frame = JSON.parse(lines[i + 1]);
+        } catch (_e) {
+          frame = null;
+        }
+        break;
+      }
+    }
+    if (!frame || typeof frame !== 'object') { return; }
+
+    if (typeof frame.css === 'string' && frame.css !== '') {
+      var el = document.querySelector('style[data-studio]');
+      if (!el) {
+        el = document.createElement('style');
+        el.setAttribute('data-studio', '1');
+        document.head.appendChild(el);
+      }
+      el.textContent = frame.css;
+    }
+    if (typeof frame.theme_version === 'number' && frame.theme_version > 0) {
+      themeVersion = frame.theme_version;
+    }
+    if (typeof frame.html === 'string') {
+      var rootEl = document.getElementById('spid3r-root');
+      if (window.__studio && typeof window.__studio.patch === 'function') {
+        window.__studio.patch(frame.html, rootEl);
+      } else if (rootEl) {
+        rootEl.innerHTML = frame.html;
+      }
+    }
+    if (typeof frame.title === 'string' && frame.title !== '') {
+      document.title = frame.title;
+    }
+    envelope.router = (frame.router && typeof frame.router === 'object') ? frame.router : null;
+    envelope.state = (frame.state && typeof frame.state === 'object') ? frame.state : null;
+    envelope.storage = (frame.storage && typeof frame.storage === 'object') ? frame.storage : null;
+    envelope.theme = (frame.theme && typeof frame.theme === 'object') ? frame.theme : null;
+    writeLocalJson(STORAGE_KEY, envelope.storage);
+    writeLocalJson(THEME_KEY, envelope.theme);
+    if (Array.isArray(frame.effects) && frame.effects.length > 0 && window.__studio && typeof window.__studio.runEffects === 'function') {
+      window.__studio.runEffects(frame.effects);
+    }
+  }
+
+  function fetchText(url) {
+    return fetch(url).then(function(r) {
+      if (!r.ok) { throw new Error('cannot load ' + url); }
+      return r.text();
+    });
+  }
+
+  async function initMainThreadFallback() {
+    bootLog('loading studio wasm runtime…');
+    if (typeof Spid3r === 'undefined') { throw new Error('spid3r.js missing'); }
+    sp = await Spid3r.init('spid3r.wasm');
+    bootLog('starting app…');
+    drainQueue();
+  }
+
+  function startWorker() {
+    return new Promise(function(resolve) {
+      if (typeof Worker !== 'function') { resolve(false); return; }
+      var settled = false;
+      var w = null;
+      function failWorker() {
+        if (w) { try { w.terminate(); } catch (_e) {} }
+        worker = null;
+        workerReady = false;
+        var ids = Object.keys(workerCallbacks);
+        for (var i = 0; i < ids.length; i++) {
+          var fn = workerCallbacks[ids[i]];
+          delete workerCallbacks[ids[i]];
+          if (fn) { fn(null, 'worker terminated'); }
+        }
+        if (!settled) { settled = true; resolve(false); }
+      }
+      try {
+        w = new Worker('wasmworker.js');
+      } catch (_we) {
+        resolve(false);
+        return;
+      }
+      worker = w;
+      w.onmessage = function(ev) {
+        var msg = (ev && ev.data) ? ev.data : {};
+        if (msg.type === 'ready') {
+          if (msg.ok) {
+            workerReady = true;
+            if (!settled) { settled = true; resolve(true); }
+          } else {
+            failWorker();
+          }
+          return;
+        }
+        if (msg.type === 'result') {
+          var cb = workerCallbacks[msg.id];
+          if (cb) {
+            delete workerCallbacks[msg.id];
+            cb(msg.res, null);
+          }
+        }
+      };
+      w.onerror = function() {
+        var wasReady = workerReady;
+        failWorker();
+        if (wasReady && !sp) {
+          initMainThreadFallback().catch(function(e) { bootLog('fatal: ' + e.message); });
+        }
+      };
+      var initId = ++reqSeq;
+      w.postMessage({ id: initId, type: 'init', src: appSrc });
+    });
+  }
+
+  async function boot() {
+    try {
+      bootLog('loading studio wasm worker…');
+      appSrc = (APP_SOURCE_JSON !== null) ? APP_SOURCE_JSON : await fetchText('app.matrix');
+      eventQueue.push(null);
+      var ok = await startWorker();
+      if (ok) {
+        bootLog('starting app…');
+        drainQueue();
+      } else {
+        await initMainThreadFallback();
+      }
+    } catch (e) {
+      bootLog('fatal: ' + e.message);
+    }
+  }
+
+  if (typeof navigator !== 'undefined' && navigator.serviceWorker && typeof location !== 'undefined') {
+    var swOk = (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+    if (swOk && location.protocol !== 'appstudio:' && location.hostname !== 'appassets.androidplatform.net') {
+      navigator.serviceWorker.register('sw.js').catch(function() {});
+    }
+  }
+
+  boot();
+})();
+
+// ===== client runtime (same code the native bridge injects) =====
+{{CLIENT_JS}}
+</script>
+</body>
+</html>

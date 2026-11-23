@@ -1,0 +1,23 @@
+# Build & package outputs
+**/build/
+dist/
+target/
+*.exe
+*.matrixc
+*.tmp
+
+# AppStudio cache & transient dev/test artifacts
+.studio-cache/
+.studio-*
+_test_storage*/
+storage/
+
+# Workspace & OS files
+.mimosa/
+.DS_Store
+Thumbs.db
+
+# Agent documentation (generated)
+AGENTS.md   
+PLAN.md
+plan.html

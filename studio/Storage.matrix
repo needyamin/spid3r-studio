@@ -1,0 +1,176 @@
+// studio/Storage.matrix
+// Persistent key/value storage backed by a JSON file (native + dev targets).
+// Call configure() once at boot with the app's data directory.
+
+let cache = {
+};
+let dir = "storage";
+let mem_only = false;
+let last_error = "";
+
+fn file_path() -> string {
+    return dir + "/kv.json";
+}
+
+/// Toggle memory-only mode (no disk I/O in wasm/browser targets).
+public fn set_memory_only(flag: bool) {
+    mem_only = flag;
+}
+
+/// Most recent storage error message, or "".
+public fn last_err() -> string {
+    return last_error;
+}
+
+/// Point storage at a directory (created on first save) and load existing data.
+public fn configure(d: string) {
+    dir = d;
+    cache = {
+    };
+    last_error = "";
+    if mem_only {
+        return;
+    }
+    let mk = dir_create(d);
+    if mk.is_err() {
+        last_error = string(mk.unwrap_err());
+    }
+    load();
+}
+
+/// Load the store from disk (safe when the file does not exist yet).
+public fn load() {
+    cache = {
+    };
+    if mem_only {
+        return;
+    }
+    let r = read_file(file_path());
+    if r.is_ok() {
+        let t = string(r.unwrap()).trim();
+        if t != "" {
+            try {
+                let parsed = json_parse(t);
+                if type_of(parsed) == "map" {
+                    cache = parsed;
+                } else {
+                    cache = {
+                    };
+                    last_error = "storage root is not a map";
+                }
+            } catch (e) {
+                cache = {
+                };
+                last_error = string(e);
+            }
+        }
+    }
+}
+
+/// Persist the store atomically via a temporary file rename.
+public fn save() -> bool {
+    if mem_only {
+        last_error = "";
+        return true;
+    }
+    if not is_dir(dir) {
+        let mk = dir_create(dir);
+        if mk.is_err() {
+            last_error = string(mk.unwrap_err());
+        }
+    }
+    let payload = json_write(cache);
+    let tmp = file_path() + ".tmp";
+    let wr = write_file(tmp, payload);
+    if wr.is_err() {
+        last_error = string(wr.unwrap_err());
+        return false;
+    }
+    let rn = rename(tmp, file_path());
+    if rn.is_err() {
+        let wr2 = write_file(file_path(), payload);
+        let _rm = remove_file(tmp);
+        if wr2.is_err() {
+            last_error = string(wr2.unwrap_err());
+            return false;
+        }
+    }
+    last_error = "";
+    return true;
+}
+
+/// Read a value, or dflt when unset.
+public fn get(k: string, dflt = null) -> any {
+    if cache.has(k) {
+        return cache[k];
+    }
+    return dflt;
+}
+
+/// Write a value and persist.
+public fn set(k: string, v) {
+    cache[k] = v;
+    save();
+}
+
+/// Read a list (default []).
+public fn get_list(k: string) -> list {
+    if cache.has(k) {
+        let v = cache[k];
+        if type_of(v) == "list" {
+            return v;
+        }
+    }
+    return [];
+}
+
+/// Read a map (default {}).
+public fn get_map(k: string) -> map {
+    if cache.has(k) {
+        let v = cache[k];
+        if type_of(v) == "map" {
+            return v;
+        }
+    }
+    return {
+    };
+}
+
+/// Delete a key and persist.
+public fn remove(k: string) {
+    if cache.has(k) {
+        let next = {
+        };
+        for (ck, cv) in cache {
+            if string(ck) != k {
+                next[ck] = cv;
+            }
+        }
+        cache = next;
+    }
+    save();
+}
+
+/// Clear in-memory cache and last error (does not wipe disk unless saved).
+public fn reset() {
+    cache = {
+    };
+    last_error = "";
+}
+
+/// Entire store snapshot.
+public fn all() -> map {
+    return cache;
+}
+
+/// Restore a store carried by the wasm host envelope (no disk write).
+public fn hydrate(m: map) {
+    if m != null and type_of(m) == "map" {
+        let next = {
+        };
+        for (k, v) in m {
+            next[k] = v;
+        }
+        cache = next;
+    }
+}

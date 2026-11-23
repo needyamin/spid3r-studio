@@ -1,0 +1,324 @@
+// studio/Bridge.matrix
+// GUI bridge glue: webview natives + the event registry + dispatch.
+// One global gui_on("ui", ...) subscription routes every UI event:
+//   JS:  window.ipc.postMessage(JSON.stringify({event:"ui", payload:{sid,kind,value,arg}}))
+//   program: gui_on("ui", cb) receives the payload -> Bridge.dispatch looks up the handler.
+
+import "Util" as U;
+
+let named = {
+};  // handler name (as passed to App.handler) -> fn(ev)
+let slots = {
+};  // "f<n>" -> fn(ev); closure slots, rebuilt on every render
+let slot_seq = 0;
+let pending_effects = [];
+let host_caps = {
+    "platform": "native", "prefers_dark": false, "viewport_width": 0
+};
+
+// GUI bridge natives (gui_title, gui_set_html, gui_eval, gui_on, gui_emit) only
+// link inside the ENTRY file of a `spid3r gui` program — in imported modules they
+// resolve to null. The entry therefore defines five one-line shims and installs
+// them here via App.bridge(...); every framework call below delegates to them.
+
+let shim_title = null;
+let shim_html = null;
+let shim_eval = null;
+let shim_on = null;
+let shim_emit = null;
+
+/// Install entry-provided GUI shims:
+/// title(t), html(s), eval(js), on(name, cb), emit(name, payload).
+public fn install(f_title, f_html, f_eval, f_on, f_emit) {
+    shim_title = f_title;
+    shim_html = f_html;
+    shim_eval = f_eval;
+    shim_on = f_on;
+    shim_emit = f_emit;
+}
+
+// ---------- webview natives (delegating wrappers) ----------
+
+public fn set_title(t: string) {
+    if shim_title != null {
+        shim_title(t);
+    }
+}
+
+public fn set_html(html: string) {
+    if shim_html != null {
+        shim_html(html);
+    }
+}
+
+public fn eval(js: string) {
+    if shim_eval != null {
+        shim_eval(js);
+    }
+}
+
+/// Subscribe to a bridge event channel (delegates to gui_on in the entry).
+public fn on(name: string, cb) {
+    if shim_on != null {
+        shim_on(name, cb);
+    }
+}
+
+/// Push an event to the client runtime.
+public fn emit(name: string, payload: string) {
+    if shim_emit != null {
+        shim_emit(name, payload);
+    }
+}
+
+// ---------- handler registry ----------
+
+/// Register a named handler (referenced by string in components).
+public fn named_handler(name: string, h) {
+    named[name] = h;
+}
+
+/// Register a closure handler for one render pass; returns its slot id.
+public fn slot(h) -> string {
+    slot_seq += 1;
+    let id = "f" + string(slot_seq);
+    slots[id] = h;
+    return id;
+}
+
+/// Drop closure slots (call at the start of every render).
+public fn clear_slots() {
+    slots = {
+    };
+    slot_seq = 0;
+}
+
+/// Normalize an inbound event payload: may be a map, a JSON string, or an
+/// {event, payload} envelope.
+public fn normalize(data) -> map ? {
+    let p = data;
+    if type_of(p) == "string" {
+        let parsed = null;
+        try {
+            parsed = json_parse(string(p));
+        } catch (_e) {
+            return null;
+        }
+        p = parsed;
+    }
+    if type_of(p) != "map" {
+        return null;
+    }
+    // unwrap an {event, payload} envelope if we got the whole thing
+    if p.has("payload") and p.has("event") {
+        let inner = p["payload"];
+        if type_of(inner) == "string" {
+            let parsed2 = null;
+            try {
+                parsed2 = json_parse(string(inner));
+            } catch (_e) {
+                parsed2 = null;
+            }
+            if type_of(parsed2) == "map" {
+                p = parsed2;
+            }
+        } elif type_of(inner) == "map" {
+            p = inner;
+        }
+    }
+    return p;
+}
+
+/// Route an event payload to its handler. Missing handlers are ignored.
+public fn dispatch(data) {
+    let p = normalize(data);
+    if p == null {
+        return;
+    }
+    if not p.has("sid") {
+        return;
+    }
+    let sid = string(p["sid"]);
+    if sid == "" {
+        return;
+    }
+    let h = lookup(sid);
+    if h == null {
+        return;
+    }
+    h(p);
+}
+
+/// Find a handler by slot id across named + closure registries.
+public fn lookup(sid: string) {
+    if named.has(sid) {
+        return named[sid];
+    }
+    if slots.has(sid) {
+        return slots[sid];
+    }
+    return null;
+}
+
+/// Whether sid is registered as a persistent named handler.
+public fn has_named(sid: string) -> bool {
+    return named.has(sid);
+}
+
+/// Reset handler registries, effects, and host capabilities.
+public fn reset() {
+    named = {
+    };
+    slots = {
+    };
+    slot_seq = 0;
+    pending_effects = [];
+    host_caps = {
+        "platform": "native", "prefers_dark": false, "viewport_width": 0
+    };
+}
+
+// ---------- unified host effects & capabilities ----------
+
+/// Queue a host side-effect descriptor delivered to the client runtime after render.
+public fn enqueue_effect(ef: map) {
+    if ef != null and type_of(ef) == "map" {
+        pending_effects.push(ef);
+    }
+}
+
+/// Return and clear all queued host side-effects.
+public fn drain_effects() -> list {
+    let out = pending_effects;
+    pending_effects = [];
+    return out;
+}
+
+/// Record host runtime capabilities reported by the client envelope.
+public fn set_host_caps(c: map) {
+    if c == null or type_of(c) != "map" {
+        return;
+    }
+    if c.has("platform") and c["platform"] != null {
+        host_caps["platform"] = string(c["platform"]);
+    }
+    if c.has("prefers_dark") {
+        host_caps["prefers_dark"] = c["prefers_dark"] == true;
+    }
+    if c.has("viewport_width") and c["viewport_width"] != null {
+        host_caps["viewport_width"] = U.ival(c, "viewport_width", 0);
+    }
+}
+
+/// Return a shallow copy of current host capability metadata.
+public fn caps() -> map {
+    let out = {
+    };
+    for (k, v) in host_caps {
+        out[k] = v;
+    }
+    return out;
+}
+
+/// Current host platform identifier ("native", "web", "android", "ios").
+public fn platform() -> string {
+    return U.s(host_caps, "platform");
+}
+
+/// Whether the host prefers dark color scheme.
+public fn prefers_dark() -> bool {
+    return U.prop(host_caps, "prefers_dark") == true;
+}
+
+/// Copy text to the host clipboard via the effects protocol.
+public fn copy_text(text: string) {
+    enqueue_effect({
+        "kind": "clipboard.copy", "text": text
+    });
+}
+
+fn is_safe_open_url(raw: string) -> bool {
+    let t = raw.trim();
+    if t == "" {
+        return false;
+    }
+    let low = t.lower();
+    if low.starts_with("https://") or low.starts_with("http://") {
+        return U.safe_url(t) != "";
+    }
+    return low.starts_with("mailto:") or low.starts_with("tel:");
+}
+
+/// Open a safe external URL via the host browser/webview.
+public fn open_url(url: string) -> bool {
+    if not is_safe_open_url(url) {
+        return false;
+    }
+    enqueue_effect({
+        "kind": "open_url", "url": url.trim()
+    });
+    return true;
+}
+
+/// Trigger lightweight haptic feedback on mobile/web hosts.
+public fn haptic(style: string = "light") {
+    let s = style.trim().lower();
+    if s == "" {
+        s = "light";
+    }
+    enqueue_effect({
+        "kind": "haptic", "style": s
+    });
+}
+
+/// Normalize, dispatch, and return "" on success or formatted error on failure.
+public fn dispatch_safe(data) -> string {
+    let p = normalize(data);
+    if p == null or not p.has("sid") {
+        return "";
+    }
+    let sid = string(p["sid"]);
+    if sid == "" {
+        return "";
+    }
+    let h = lookup(sid);
+    if h != null {
+        try {
+            h(p);
+        } catch (e) {
+            return sid + ": " + string(e);
+        }
+    }
+    return "";
+}
+
+/// Dispatch + re-render: the single subscription installed by App.run.
+/// After any handler mutates state/navigation, the visible page re-renders.
+public fn dispatch_and_render(data, app) {
+    let p = normalize(data);
+    if p == null {
+        return;
+    }
+    if not p.has("sid") {
+        return;
+    }
+    let sid = string(p["sid"]);
+    let h = lookup(sid);
+    if h != null {
+        try {
+            h(p);
+        } catch (e) {
+            set_html(
+                "<div class=\"page\"><div class=\"card\"><div class=\"title\" style=\"color:var(--danger)\">Handler error</div><div class=\"mono\">" + U.esc(sid + ": " + string(e)) + "</div></div></div>"
+            );
+            return;
+        }
+    }
+    try {
+        app.render();
+    } catch (e) {
+        set_html(
+            "<div class=\"page\"><div class=\"card\"><div class=\"title\" style=\"color:var(--danger)\">Render error</div><div class=\"mono\">" + U.esc(string(e)) + "</div></div></div>"
+        );
+    }
+}

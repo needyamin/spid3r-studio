@@ -1,0 +1,156 @@
+// studio/Theme.matrix
+// AppStudio design tokens — colors, spacing, typography, radii.
+// A single source of truth consumed by CSS.matrix to build the stylesheet.
+
+fn default_tokens() -> map {
+    return {
+        "mode": "light",
+        "primary": "#4f46e5",
+        "on_primary": "#ffffff",
+        "secondary": "#0ea5e9",
+        "accent": "#f59e0b",
+        "danger": "#ef4444",
+        "success": "#22c55e",
+        "bg": "#f4f5fb",
+        "surface": "#ffffff",
+        "surface2": "#eef0f8",
+        "text": "#111827",
+        "text2": "#6b7280",
+        "border": "#e5e7eb",
+        "nav_bg": "#ffffff",
+        "radius": "14",
+        "radius_sm": "10",
+        "font": "-apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif",
+        "mono": "ui-monospace, 'Cascadia Mono', Menlo, monospace",
+    };
+}
+
+let T = default_tokens();
+let custom_overrides = {
+};
+let ver = 1;
+
+fn apply_scheme(m: string) {
+    if m == "dark" {
+        T["mode"] = "dark";
+        T["bg"] = "#0b0f1a";
+        T["surface"] = "#151b2b";
+        T["surface2"] = "#1e2638";
+        T["text"] = "#f3f4f6";
+        T["text2"] = "#9ca3af";
+        T["border"] = "#263047";
+        T["nav_bg"] = "#121826";
+    } else {
+        T["mode"] = "light";
+        T["bg"] = "#f4f5fb";
+        T["surface"] = "#ffffff";
+        T["surface2"] = "#eef0f8";
+        T["text"] = "#111827";
+        T["text2"] = "#6b7280";
+        T["border"] = "#e5e7eb";
+        T["nav_bg"] = "#ffffff";
+    }
+}
+
+/// Merge user overrides over the token table (supports flat keys and 1-level nested maps).
+public fn custom(overrides: map) {
+    if overrides == null or type_of(overrides) != "map" {
+        return;
+    }
+    for (k, v) in overrides {
+        if type_of(v) == "map" {
+            for (nk, nv) in v {
+                let s = string(nv);
+                T[string(nk)] = s;
+                custom_overrides[string(nk)] = s;
+            }
+        } else {
+            let s2 = string(v);
+            T[string(k)] = s2;
+            custom_overrides[string(k)] = s2;
+        }
+    }
+    ver += 1;
+}
+
+/// Switch color scheme ("light" or "dark") while preserving custom token overrides.
+public fn mode(m: string) {
+    apply_scheme(m);
+    for (k, v) in custom_overrides {
+        let sk = string(k);
+        if sk != "mode" and sk != "bg" and sk != "surface" and sk != "surface2" and sk != "text" and sk != "text2" and sk != "border" and sk != "nav_bg" {
+            T[sk] = string(v);
+        }
+    }
+    ver += 1;
+}
+
+/// Override the primary brand color.
+public fn primary(color: string) {
+    let c = string(color);
+    T["primary"] = c;
+    custom_overrides["primary"] = c;
+    ver += 1;
+}
+
+/// Reset theme tokens and custom overrides to light defaults.
+public fn reset() {
+    T = default_tokens();
+    custom_overrides = {
+    };
+    ver += 1;
+}
+
+/// Read the full token table (for CSS generation and apps that want tokens).
+public fn tokens() -> map {
+    return T;
+}
+
+/// Read one token ("" when unknown).
+public fn token(name: string) -> string {
+    if T.has(name) {
+        return string(T[name]);
+    }
+    return "";
+}
+
+/// Snapshot current token map for host persistence across wasm evals.
+public fn snapshot() -> map {
+    let out = {
+    };
+    for (k, v) in T {
+        out[k] = v;
+    }
+    return out;
+}
+
+/// Restore tokens carried by the wasm host envelope or manifest theme block.
+public fn restore(m: map) {
+    if m == null or type_of(m) != "map" {
+        return;
+    }
+    if m.has("mode") and m["mode"] != null {
+        apply_scheme(string(m["mode"]));
+    }
+    for (k, v) in m {
+        if v != null {
+            let sk = string(k);
+            T[sk] = string(v);
+            if sk != "mode" and sk != "bg" and sk != "surface" and sk != "surface2" and sk != "text" and sk != "text2" and sk != "border" and sk != "nav_bg" {
+                custom_overrides[sk] = string(v);
+            }
+        }
+    }
+}
+
+/// Monotonic theme revision counter for CSS dirty-tracking.
+public fn version() -> int {
+    return ver;
+}
+
+/// Restore the theme revision counter across stateless wasm evaluations.
+public fn set_version(v: int) {
+    if v > 0 {
+        ver = v;
+    }
+}

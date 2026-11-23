@@ -1,0 +1,55 @@
+// app.matrix — {{APP_NAME}}
+// The AUTHOR file: pages, handlers, app assembly. Pages return ui.* component
+// trees; handlers mutate state (state.set / storage.set) — the framework
+// re-renders after each event. The native entry is main.matrix; wasm/mobile
+// targets use studio_app() + a driver.
+
+import "vendor/studio/App" as appkit;
+import "vendor/studio/Components" as ui;
+import "vendor/studio/State" as state;
+import "vendor/studio/Storage" as storage;
+
+// ---- state ----
+
+fn load_taps() {
+    state.set("taps", int(storage.get("taps", 0)));
+}
+
+fn add_tap(_ev) {
+    let n = int(state.get_or("taps", 0)) + 1;
+    state.set("taps", n);
+    storage.set("taps", n);
+}
+
+fn reset_taps(_ev) {
+    state.set("taps", 0);
+    storage.set("taps", 0);
+}
+
+// ---- pages ----
+
+fn Home() -> map {
+    let n = int(state.get_or("taps", 0));
+    return ui.page([
+        ui.navbar("{{APP_NAME}}"),
+        ui.card([
+            ui.text("Taps: {n}", "h1"),
+            ui.spacer(6),
+            ui.button("Tap me", "add_tap"),
+            ui.spacer(6),
+            ui.button("Reset", "reset_taps", "outline"),
+        ]),
+        ui.spacer(10),
+        ui.text("Edit pages in this file. Add pages with .page(\"Name\", Fn).", "muted"),
+    ]);
+}
+
+// ---- app assembly (called by entries; no main here) ----
+
+public fn studio_app() {
+    return appkit.App("{{APP_NAME}}", "{{BUNDLE_ID}}", "0.1.0")
+        .page("Home", Home)
+        .handler("add_tap", add_tap)
+        .handler("reset_taps", reset_taps)
+        .boot(load_taps);
+}

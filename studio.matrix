@@ -1,0 +1,155 @@
+// studio.matrix
+// AppStudio CLI entry — routes subcommands to focused modules in cli/.
+
+import "studio/ClientJS" as clientjs;
+import "tools/FlatKit" as flatkit;
+import "cli/Args" as args_cli;
+import "cli/Fs" as fs;
+import "cli/Manifest" as man;
+import "cli/New" as c_new;
+import "cli/RunDev" as c_run;
+import "cli/Doctor" as c_doc;
+import "cli/Dx" as c_dx;
+import "cli/DevWeb" as c_dev_web;
+import "cli/BuildWeb" as b_web;
+import "cli/BuildDesktop" as b_desk;
+import "cli/BuildAndroid" as b_and;
+import "cli/BuildIos" as b_ios;
+
+fn cmd_build(appdir: string, target: string, outdir: string) -> int {
+    let entry = man.find_entry(appdir);
+    if entry == "" {
+        println("error: no app entry found in " + appdir);
+        return 2;
+    }
+    let t = target;
+    if t == "" {
+        t = "web";
+    }
+    let out = outdir;
+    if out == "" {
+        out = fs.join_dir(appdir, "build");
+    } else {
+        out = fs.trim_slash(out);
+    }
+    fs.ensure_dir(out);
+
+    if t == "desktop" {
+        return b_desk.build(appdir, entry, out + "/desktop");
+    }
+    if t != "web" and t != "wasm" and t != "android" and t != "ios" {
+        println("error: unknown target '" + t + "' (web | android | ios | desktop)");
+        return 2;
+    }
+
+    let flat = flatkit.bundle(appdir);
+    if flat == "" {
+        println("error: flattening the app failed (is studio/ complete?)");
+        return 1;
+    }
+    let cjs = clientjs.runtime_js();
+
+    if t == "web" or t == "wasm" {
+        return b_web.build(appdir, out + "/web", flat, cjs);
+    }
+    if t == "android" {
+        return b_and.build(appdir, out + "/android", flat, cjs);
+    }
+    return b_ios.build(appdir, out + "/ios", flat, cjs);
+}
+
+fn main() -> int {
+    let cli = args();
+    if cli.len() == 0 {
+        args_cli.usage();
+        return 0;
+    }
+    let cmd = string(cli[0]);
+    let rest = [];
+    let i = 1;
+    while i < cli.len() {
+        rest.push(cli[i]);
+        i += 1;
+    }
+
+    if cmd == "help" or cmd == "--help" or cmd == "-h" {
+        args_cli.usage();
+        return 0;
+    }
+    if cmd == "new" {
+        let name = "";
+        let outdir = "";
+        if rest.len() > 0 {
+            name = string(rest[0]);
+        }
+        if rest.len() > 1 {
+            outdir = string(rest[1]);
+        }
+        return c_new.cmd_new(name, outdir);
+    }
+    if cmd == "run" {
+        if rest.len() == 0 {
+            println("error: run requires an app directory");
+            return 2;
+        }
+        return c_run.cmd_run(string(rest[0]));
+    }
+    if cmd == "dev" {
+        if rest.len() == 0 {
+            println("error: dev requires an app directory");
+            return 2;
+        }
+        let appdir = string(rest[0]);
+        let dev_target = args_cli.arg_value(rest, "--target");
+        if dev_target == "web" or dev_target == "wasm" {
+            let host = args_cli.arg_value(rest, "--host");
+            let port = args_cli.arg_value(rest, "--port");
+            let once = args_cli.has_flag(rest, "--once");
+            return c_dev_web.cmd_dev_web(
+                appdir,
+                host,
+                port,
+                once,
+                () => cmd_build(appdir, "web", "")
+            );
+        }
+        return c_run.cmd_dev(appdir);
+    }
+    if cmd == "test" {
+        return c_dx.cmd_test(rest);
+    }
+    if cmd == "clean" {
+        return c_dx.cmd_clean(rest);
+    }
+    if cmd == "upgrade" {
+        if rest.len() == 0 {
+            println("error: upgrade requires an app directory");
+            return 2;
+        }
+        return c_dx.cmd_upgrade(string(rest[0]));
+    }
+    if cmd == "check" {
+        if rest.len() == 0 {
+            println("error: check requires an app directory");
+            return 2;
+        }
+        return c_run.cmd_check(string(rest[0]));
+    }
+    if cmd == "doctor" {
+        return c_doc.cmd_doctor();
+    }
+    if cmd == "build" {
+        if rest.len() == 0 {
+            println("error: build requires an app directory");
+            return 2;
+        }
+        return cmd_build(
+            string(rest[0]),
+            args_cli.arg_value(rest, "--target"),
+            args_cli.arg_value(rest, "-o")
+        );
+    }
+    println("error: unknown command '" + cmd + "'");
+    args_cli.usage();
+    return 2;
+}
