@@ -4,6 +4,8 @@
 
 **Spid3r Studio** is a production-ready cross-platform application development environment, declarative UI framework, and **MVC Control Panel GUI** built natively in [Spid3r v1.1.1](https://github.com/needyamin/spid3r/releases/tag/v1.1.1). Build, debug, and ship high-performance apps for **iOS**, **Android**, **Windows**, **macOS**, **Linux**, and **Web / Mobile PWA** from a single `.matrix` source tree — even signing and deploying iOS `.ipa` apps to a real iPhone without a Mac.
 
+<img width="1919" height="1028" alt="screenshot-20261124-022815" src="https://github.com/user-attachments/assets/e654cebb-3b59-46cd-b7cb-c259469c76d8" />
+
 ---
 
 ## Why Spid3r Studio?
