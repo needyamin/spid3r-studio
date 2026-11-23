@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 540" width="100%" height="100%" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b101e"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="headGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#4f46e5"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="coreGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1e1b4b"/>
+      <stop offset="100%" stop-color="#172554"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#38bdf8"/>
+    </marker>
+    <marker id="arrowIndigo" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#818cf8"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1100" height="540" rx="16" fill="url(#bgGrad)" stroke="#1e293b" stroke-width="2"/>
+
+  <!-- Header Banner -->
+  <rect x="24" y="20" width="1052" height="54" rx="10" fill="url(#headGrad)"/>
+  <text x="44" y="45" fill="#ffffff" font-size="18" font-weight="800" letter-spacing="-0.3">Spid3r Studio — 5-Tier A–Z Architecture &amp; 6-Platform Compilation Pipeline</text>
+  <text x="44" y="64" fill="#e0f2fe" font-size="12" font-weight="500">One Declarative .matrix Codebase  •  Zero External Dependencies  •  Spid3r v1.1.1 Compiler &amp; WASM Runtime</text>
+
+  <!-- Column 1: 5-Tier A-Z Directories -->
+  <text x="36" y="104" fill="#94a3b8" font-size="11.5" font-weight="700" letter-spacing="1">5-TIER A–Z ROOT DIRECTORIES</text>
+
+  <!-- Tier 1: frameworks/ -->
+  <rect x="28" y="116" width="300" height="72" rx="10" fill="#151e32" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="44" y="138" fill="#818cf8" font-size="13.5" font-weight="700">1. frameworks/</text>
+  <text x="44" y="156" fill="#e2e8f0" font-size="11.5" font-family="ui-monospace, Consolas, monospace">studio/*.matrix • targets/* • templates/*</text>
+  <text x="44" y="174" fill="#94a3b8" font-size="11">Declarative UI, Router, State, Theme &amp; Host SDKs</text>
+
+  <!-- Tier 2: downloads/ -->
+  <rect x="28" y="198" width="300" height="72" rx="10" fill="#151e32" stroke="#06b6d4" stroke-width="1.5"/>
+  <text x="44" y="220" fill="#22d3ee" font-size="13.5" font-weight="700">2. downloads/</text>
+  <text x="44" y="238" fill="#e2e8f0" font-size="11.5" font-family="ui-monospace, Consolas, monospace">xtool/1.24.0 • wasm-runtime • installers</text>
+  <text x="44" y="256" fill="#94a3b8" font-size="11">Cached spid3r.wasm, xtool AppImage &amp; Xcode.xip</text>
+
+  <!-- Tier 3: documents/ -->
+  <rect x="28" y="280" width="300" height="72" rx="10" fill="#151e32" stroke="#10b981" stroke-width="1.5"/>
+  <text x="44" y="302" fill="#34d399" font-size="13.5" font-weight="700">3. documents/</text>
+  <text x="44" y="320" fill="#e2e8f0" font-size="11.5" font-family="ui-monospace, Consolas, monospace">documentation.html • guides • logs • diagrams</text>
+  <text x="44" y="338" fill="#94a3b8" font-size="11">Developer Handbook, Tutorials &amp; Diagnostic Reports</text>
+
+  <!-- Tier 4: workspace/ -->
+  <rect x="28" y="362" width="300" height="72" rx="10" fill="#151e32" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="44" y="384" fill="#fbbf24" font-size="13.5" font-weight="700">4. workspace/</text>
+  <text x="44" y="402" fill="#e2e8f0" font-size="11.5" font-family="ui-monospace, Consolas, monospace">demo/ • &lt;AppName&gt;/ (app.matrix, studio.json)</text>
+  <text x="44" y="420" fill="#94a3b8" font-size="11">Developer Applications, Multi-Page Sources &amp; Assets</text>
+
+  <!-- Tier 5: core/ -->
+  <rect x="28" y="444" width="300" height="72" rx="10" fill="#151e32" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="44" y="466" fill="#c084fc" font-size="13.5" font-weight="700">5. core/</text>
+  <text x="44" y="484" fill="#e2e8f0" font-size="11.5" font-family="ui-monospace, Consolas, monospace">cli/ • gui/ (MVC) • tools/ • tests/ • Engine</text>
+  <text x="44" y="502" fill="#94a3b8" font-size="11">Compiler Driver, FlatKit, Diagnostics &amp; Recovery</text>
+
+  <!-- Column 2: Core Engine & Bundler Hub -->
+  <text x="394" y="104" fill="#94a3b8" font-size="11.5" font-weight="700" letter-spacing="1">CORE COMPILER &amp; BUNDLER ENGINE</text>
+
+  <rect x="386" y="116" width="318" height="400" rx="14" fill="url(#coreGrad)" stroke="#4f46e5" stroke-width="2"/>
+
+  <!-- Inside Core Hub -->
+  <rect x="406" y="136" width="278" height="78" rx="9" fill="#0f172a" stroke="#6366f1" stroke-width="1.2"/>
+  <text x="422" y="158" fill="#a5b4fc" font-size="13" font-weight="700">studio.matrix + core/cli/*</text>
+  <text x="422" y="176" fill="#cbd5e1" font-size="11">Unified CLI Driver &amp; Manifest Validator</text>
+  <text x="422" y="194" fill="#64748b" font-size="10.5" font-family="ui-monospace, Consolas, monospace">new | run | dev | check | build | ios | test</text>
+
+  <rect x="406" y="228" width="278" height="84" rx="9" fill="#0f172a" stroke="#38bdf8" stroke-width="1.2"/>
+  <text x="422" y="250" fill="#7dd3fc" font-size="13" font-weight="700">FlatKit.matrix Lexer Bundler</text>
+  <text x="422" y="268" fill="#cbd5e1" font-size="11">Topological DAG Import Walk &amp; Symbol Isolation</text>
+  <text x="422" y="286" fill="#64748b" font-size="10.5" font-family="ui-monospace, Consolas, monospace">mod_&lt;Mod&gt;_&lt;var&gt; + Stateless WASM REPL Driver</text>
+
+  <rect x="406" y="326" width="278" height="84" rx="9" fill="#0f172a" stroke="#34d399" stroke-width="1.2"/>
+  <text x="422" y="348" fill="#6ee7b7" font-size="13" font-weight="700">Diagnostics &amp; Recovery Engine</text>
+  <text x="422" y="366" fill="#cbd5e1" font-size="11">Spid3r v1.1.1 Error Parser (BUG-01..BUG-10)</text>
+  <text x="422" y="384" fill="#64748b" font-size="10.5" font-family="ui-monospace, Consolas, monospace">BOM Stripper • 2-Pass fmt • Vendor Sync</text>
+
+  <rect x="406" y="424" width="278" height="74" rx="9" fill="#0f172a" stroke="#c084fc" stroke-width="1.2"/>
+  <text x="422" y="446" fill="#d8b4fe" font-size="13" font-weight="700">MVC Control Panel (core/gui/*)</text>
+  <text x="422" y="464" fill="#cbd5e1" font-size="11">6 Views • Built-in Code Editor • 1-Click SDKs</text>
+  <text x="422" y="482" fill="#64748b" font-size="10.5" font-family="ui-monospace, Consolas, monospace">StudioModel • StudioController • Jobs</text>
+
+  <!-- Arrows from Tiers to Core Hub -->
+  <line x1="328" y1="152" x2="380" y2="175" stroke="#818cf8" stroke-width="2" marker-end="url(#arrowIndigo)"/>
+  <line x1="328" y1="234" x2="380" y2="265" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="328" y1="398" x2="380" y2="285" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="328" y1="480" x2="380" y2="455" stroke="#818cf8" stroke-width="2" marker-end="url(#arrowIndigo)"/>
+
+  <!-- Column 3: 6 OS Target Outputs -->
+  <text x="770" y="104" fill="#94a3b8" font-size="11.5" font-weight="700" letter-spacing="1">6 NATIVE &amp; WEB TARGET PLATFORMS</text>
+
+  <!-- Target 1: iOS -->
+  <rect x="762" y="116" width="310" height="90" rx="10" fill="#151e32" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="780" y="139" fill="#d8b4fe" font-size="14" font-weight="700">iOS Native (.ipa — No Mac Needed)</text>
+  <text x="780" y="158" fill="#cbd5e1" font-size="11.5">SwiftPM + WKURLSchemeHandler (appstudio://)</text>
+  <text x="780" y="176" fill="#94a3b8" font-size="11">Darwin Swift SDK + xtool 1.24.0 Codesigning</text>
+  <text x="780" y="193" fill="#38bdf8" font-size="10.5" font-family="ui-monospace, Consolas, monospace">16 KB Chunked USB Deploy (ios_install_ipa.py)</text>
+
+  <!-- Target 2: Android -->
+  <rect x="762" y="218" width="310" height="90" rx="10" fill="#151e32" stroke="#10b981" stroke-width="1.5"/>
+  <text x="780" y="241" fill="#6ee7b7" font-size="14" font-weight="700">Android Native (Gradle / APK)</text>
+  <text x="780" y="260" fill="#cbd5e1" font-size="11.5">Kotlin WebViewAssetLoader + spid3r.wasm</text>
+  <text x="780" y="278" fill="#94a3b8" font-size="11">OnBackPressedCallback Hardware Back Navigation</text>
+  <text x="780" y="295" fill="#34d399" font-size="10.5" font-family="ui-monospace, Consolas, monospace">gradle assembleDebug + adb install -r</text>
+
+  <!-- Target 3: Windows, macOS, Linux Desktop -->
+  <rect x="762" y="320" width="310" height="90" rx="10" fill="#151e32" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="780" y="343" fill="#a5b4fc" font-size="14" font-weight="700">Windows • macOS • Linux Desktop</text>
+  <text x="780" y="362" fill="#cbd5e1" font-size="11.5">Native WebView2 / WKWebView / WebKitGTK</text>
+  <text x="780" y="380" fill="#94a3b8" font-size="11">AOT Launcher + Bytecode + Embedded host.html</text>
+  <text x="780" y="397" fill="#818cf8" font-size="10.5" font-family="ui-monospace, Consolas, monospace">spid3r build --release --bundle-runtime</text>
+
+  <!-- Target 4: Web & Mobile PWA -->
+  <rect x="762" y="422" width="310" height="94" rx="10" fill="#151e32" stroke="#06b6d4" stroke-width="1.5"/>
+  <text x="780" y="445" fill="#67e8f9" font-size="14" font-weight="700">Web &amp; Offline Mobile PWA</text>
+  <text x="780" y="464" fill="#cbd5e1" font-size="11.5">Off-Main-Thread Web Worker (wasmworker.js)</text>
+  <text x="780" y="482" fill="#94a3b8" font-size="11">Offline Cache Service Worker (sw.js) + Manifest</text>
+  <text x="780" y="499" fill="#22d3ee" font-size="10.5" font-family="ui-monospace, Consolas, monospace">Live LAN Wi-Fi Server (DevWeb.matrix)</text>
+
+  <!-- Arrows from Core Hub to 6 Targets -->
+  <line x1="704" y1="245" x2="756" y2="162" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="704" y1="265" x2="756" y2="262" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="704" y1="300" x2="756" y2="365" stroke="#818cf8" stroke-width="2" marker-end="url(#arrowIndigo)"/>
+  <line x1="704" y1="320" x2="756" y2="465" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrow)"/>
+</svg>

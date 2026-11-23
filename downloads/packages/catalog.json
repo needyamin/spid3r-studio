@@ -1,0 +1,57 @@
+{
+  "catalogVersion": "1.2.0",
+  "directory": "downloads/",
+  "packages": [
+    {
+      "id": "spid3r-wasm-runtime",
+      "name": "Spid3r WASM Runtime (spid3r.wasm + spid3r.js)",
+      "category": "Core Runtime",
+      "targetDir": "downloads/wasm-runtime/",
+      "requiredFor": "Web, PWA, Android, iOS"
+    },
+    {
+      "id": "xtool-ios",
+      "name": "xtool 1.24.0 Cross-Platform iOS Builder",
+      "category": "iOS SDK",
+      "targetDir": "downloads/xtool/1.24.0/",
+      "url": "https://github.com/xtool-org/xtool/releases/download/1.24.0/xtool-x86_64.AppImage",
+      "requiredFor": "iOS .ipa Building & Codesigning"
+    },
+    {
+      "id": "darwin-ios-sdk",
+      "name": "Darwin iOS Swift SDK (Xcode.xip)",
+      "category": "iOS SDK",
+      "targetDir": "downloads/installers/",
+      "url": "https://developer.apple.com/download/all/?q=Xcode",
+      "requiredFor": "iOS arm64 SwiftPM Compilation"
+    },
+    {
+      "id": "openjdk-17",
+      "name": "Microsoft OpenJDK 17",
+      "category": "Android SDK",
+      "packageId": "Microsoft.OpenJDK.17",
+      "requiredFor": "Android Gradle Builds"
+    },
+    {
+      "id": "gradle-build",
+      "name": "Gradle Build Tool",
+      "category": "Android SDK",
+      "packageId": "Gradle.Gradle",
+      "requiredFor": "Android APK Assembly"
+    },
+    {
+      "id": "android-platform-tools",
+      "name": "Android Platform-Tools (ADB)",
+      "category": "Android SDK",
+      "packageId": "Google.PlatformTools",
+      "requiredFor": "Android USB Deployment"
+    },
+    {
+      "id": "usbipd-win",
+      "name": "usbipd-win USB-to-WSL2 Bridge",
+      "category": "iOS USB",
+      "packageId": "dorssel.usbipd-win",
+      "requiredFor": "Windows-to-WSL2 iPhone USB Passthrough"
+    }
+  ]
+}

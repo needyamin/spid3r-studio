@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spid3r Studio — Complete Developer Guidelines &amp; Architecture Reference</title>
+<style>
+  :root {
+    --bg: #f6f8fc;
+    --surface: #ffffff;
+    --surface-2: #eef2f9;
+    --text: #0f172a;
+    --muted: #475569;
+    --border: #dce3ee;
+    --primary: #4f46e5;
+    --primary-soft: rgba(79, 70, 229, 0.1);
+    --accent: #0ea5e9;
+    --ok: #16a34a;
+    --warn: #d97706;
+    --err: #dc2626;
+    --code-bg: #0f172a;
+    --code-fg: #e2e8f0;
+    --shadow: 0 4px 20px rgba(15, 23, 42, 0.05);
+    --radius: 12px;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", "Fira Code", Menlo, Consolas, monospace;
+  }
+  [data-theme="dark"] {
+    --bg: #090d16;
+    --surface: #121a2b;
+    --surface-2: #192338;
+    --text: #f1f5f9;
+    --muted: #94a3b8;
+    --border: #25314d;
+    --primary: #818cf8;
+    --primary-soft: rgba(129, 140, 248, 0.14);
+    --accent: #38bdf8;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --err: #f87171;
+    --code-bg: #070b14;
+    --code-fg: #e2e8f0;
+    --shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  a { color: var(--primary); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: var(--surface-2);
+    padding: 0.15em 0.42em;
+    border-radius: 6px;
+  }
+  pre {
+    position: relative;
+    margin: 14px 0;
+    padding: 14px 16px;
+    padding-right: 72px;
+    background: var(--code-bg);
+    color: var(--code-fg);
+    border-radius: 10px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    line-height: 1.5;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    color: inherit;
+    font-size: inherit;
+  }
+  .copy-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.08);
+    color: #e2e8f0;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.75rem;
+    font-family: var(--font);
+    cursor: pointer;
+  }
+  .copy-btn:hover { background: rgba(255, 255, 255, 0.18); }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 270px minmax(0, 1fr);
+    max-width: 1360px;
+    margin: 0 auto;
+    gap: 28px;
+    padding: 24px 20px 64px;
+  }
+  aside.sidebar {
+    position: sticky;
+    top: 20px;
+    align-self: start;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 16px;
+    box-shadow: var(--shadow);
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+  }
+  .brand-title {
+    font-weight: 800;
+    font-size: 1.08rem;
+    letter-spacing: -0.01em;
+  }
+  .brand-badge {
+    display: inline-block;
+    margin-top: 2px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: var(--primary);
+    background: var(--primary-soft);
+    padding: 2px 8px;
+    border-radius: 999px;
+  }
+  .theme-btn {
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .nav-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .nav-list a {
+    display: block;
+    padding: 7px 10px;
+    border-radius: 8px;
+    color: var(--muted);
+    font-size: 0.88rem;
+    font-weight: 500;
+  }
+  .nav-list a:hover,
+  .nav-list a.active {
+    background: var(--primary-soft);
+    color: var(--primary);
+    text-decoration: none;
+  }
+  .sidebar-meta {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+
+  main.content {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+  .hero {
+    background: linear-gradient(135deg, #4f46e5 0%, #0891b2 100%);
+    color: #ffffff;
+    border-radius: 16px;
+    padding: 28px 30px;
+    box-shadow: var(--shadow);
+  }
+  .hero h1 {
+    margin: 0 0 8px;
+    font-size: 2rem;
+    letter-spacing: -0.02em;
+  }
+  .hero p {
+    margin: 0 0 16px;
+    color: rgba(255, 255, 255, 0.92);
+    max-width: 82ch;
+  }
+  .pill-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .pill {
+    font-size: 0.8rem;
+    font-weight: 600;
+    background: rgba(255, 255, 255, 0.16);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    padding: 4px 11px;
+    border-radius: 999px;
+  }
+
+  section.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px 26px;
+    box-shadow: var(--shadow);
+    scroll-margin-top: 20px;
+  }
+  section.card h2 {
+    margin: 0 0 12px;
+    font-size: 1.38rem;
+    letter-spacing: -0.01em;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+  }
+  section.card h3 {
+    margin: 18px 0 8px;
+    font-size: 1.05rem;
+  }
+  p { margin: 8px 0 12px; }
+  ul, ol { margin: 8px 0 12px; padding-left: 20px; }
+  li { margin-bottom: 6px; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 0.9rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    background: var(--surface-2);
+    font-weight: 600;
+  }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+    gap: 14px;
+    margin: 12px 0;
+  }
+  .grid-3 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 12px;
+    margin: 12px 0;
+  }
+  .mini-card {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .mini-card h4 {
+    margin: 0 0 6px;
+    font-size: 0.98rem;
+    color: var(--primary);
+  }
+  .callout {
+    background: var(--primary-soft);
+    border-left: 4px solid var(--primary);
+    padding: 12px 14px;
+    border-radius: 0 8px 8px 0;
+    margin: 12px 0;
+    font-size: 0.92rem;
+  }
+  .callout.warn {
+    background: rgba(217, 119, 6, 0.12);
+    border-left-color: var(--warn);
+  }
+
+  @media (max-width: 880px) {
+    .layout { grid-template-columns: 1fr; }
+    aside.sidebar { position: static; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">
+      <div>
+        <div class="brand-title">Spid3r Studio</div>
+        <span class="brand-badge">v1.2.0 • Spid3r 1.1.1</span>
+      </div>
+      <button type="button" class="theme-btn" id="theme-toggle">Theme</button>
+    </div>
+    <ul class="nav-list">
+      <li><a href="#architecture">1. 5-Tier A–Z Architecture</a></li>
+      <li><a href="#control-panel">2. MVC Control Panel GUI</a></li>
+      <li><a href="#developer-guidelines">3. Developer Guidelines</a></li>
+      <li><a href="#spid3r-rules">4. Spid3r &amp; .matrix Rules</a></li>
+      <li><a href="#components">5. Declarative UI Components</a></li>
+      <li><a href="#state-navigation">6. State, Storage, Router &amp; HTTP</a></li>
+      <li><a href="#manifest">7. studio.json Configuration</a></li>
+      <li><a href="#platforms">8. 6-OS Build &amp; Deployment</a></li>
+      <li><a href="#diagnostics-recovery">9. Diagnostics, QA &amp; Recovery</a></li>
+      <li><a href="#cli-reference">10. Complete CLI Reference</a></li>
+    </ul>
+    <div class="sidebar-meta">
+      <div><strong>Targets:</strong> iOS, Android, Windows, macOS, Linux, Web/PWA</div>
+      <div><strong>Verification:</strong> 55 <code>.matrix</code> files • 5 Suites (310 checks)</div>
+    </div>
+  </aside>
+
+  <main class="content">
+    <header class="hero">
+      <h1>Spid3r Studio — Complete Developer Handbook</h1>
+      <p>Comprehensive architectural guide, coding standards, Spid3r v1.1.1 language compatibility rules, MVC Control Panel manual, and 6-platform compilation reference for building production applications in <code>.matrix</code>.</p>
+      <div class="pill-row">
+        <span class="pill">iOS (.ipa via xtool)</span>
+        <span class="pill">Android (Kotlin / APK)</span>
+        <span class="pill">Windows / macOS / Linux Native</span>
+        <span class="pill">WebWorker WASM + Offline PWA</span>
+        <span class="pill">MVC Control Panel</span>
+        <span class="pill">1-Click Failure Recovery</span>
+      </div>
+    </header>
+
+    <!-- 1. 5-TIER A-Z ARCHITECTURE -->
+    <section class="card" id="architecture">
+      <h2>1. 5-Tier A–Z Codebase Architecture</h2>
+      <p>Spid3r Studio enforces a strict <strong>5-folder root architecture</strong> so frameworks, large binary downloads, developer documentation, user application workspaces, and core engine tools never mix.</p>
+      <p style="margin: 14px 0;"><img src="diagrams/architecture-overview.svg" alt="Spid3r Studio 5-Tier Architecture and 6-Platform Pipeline" style="width:100%;height:auto;border-radius:12px;display:block;"></p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Top-Level Folder</th>
+            <th>Subdirectories &amp; Key Files</th>
+            <th>Responsibility &amp; Ownership Guidelines</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>1. <code>frameworks/</code></strong></td>
+            <td><code>studio/*.matrix</code><br><code>targets/*</code><br><code>templates/starter/*</code><br><code>registry.json</code></td>
+            <td>All reusable UI framework modules (<code>App</code>, <code>Bridge</code>, <code>ClientJS</code>, <code>Components</code>, <code>CSS</code>, <code>Http</code>, <code>Render</code>, <code>Router</code>, <code>State</code>, <code>Storage</code>, <code>Theme</code>, <code>Util</code>), 6-OS host templates, starter scaffolding templates, and the SDK registry.</td>
+          </tr>
+          <tr>
+            <td><strong>2. <code>downloads/</code></strong></td>
+            <td><code>installers/Xcode_27.2.xip</code><br><code>xtool/1.24.0/*</code><br><code>wasm-runtime/1.1.1/*</code><br><code>packages/catalog.json</code></td>
+            <td>Dedicated storage for large toolchains, SDK installers, extracted <code>xtool</code> AppImage/SquashFS, and cached <code>spid3r.wasm</code> + <code>spid3r.js</code> runtime binaries. Ignored by Git except <code>packages/catalog.json</code>.</td>
+          </tr>
+          <tr>
+            <td><strong>3. <code>documents/</code></strong></td>
+            <td><code>documentation.html</code><br><code>guides/*</code>, <code>tutorials/*</code><br><code>references/*</code><br><code>logs/*</code>, <code>reports/*</code></td>
+            <td>Developer guidelines, <code>.matrix</code> language tutorials, <code>studio.json</code> references, exported Control Panel console logs (<code>studio-control-panel.log</code>), and JSON diagnostic reports.</td>
+          </tr>
+          <tr>
+            <td><strong>4. <code>workspace/</code></strong></td>
+            <td><code>demo/</code><br><code>&lt;YourApp&gt;/</code></td>
+            <td>Dedicated developer workspace where projects are created, edited, compiled, tested, and packaged. Includes the multi-page <code>workspace/demo</code> showcase app.</td>
+          </tr>
+          <tr>
+            <td><strong>5. <code>core/</code></strong></td>
+            <td><code>cli/*.matrix</code><br><code>gui/*</code> (MVC Control Panel)<br><code>tools/FlatKit.matrix</code><br><code>tests/*.matrix</code><br><code>Diagnostics.matrix</code>, <code>Recovery.matrix</code>, <code>Plugins.matrix</code></td>
+            <td>Application engine, compiler driver subcommands, lexer-aware multi-file bundler, paced iOS USB installer, automated failure recovery, structured diagnostics, MVC Control Panel GUI, and 5 verification suites.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 2. MVC CONTROL PANEL GUI -->
+    <section class="card" id="control-panel">
+      <h2>2. Spid3r Studio MVC Control Panel GUI (<code>core/gui/</code>)</h2>
+      <p>The native desktop Control Panel is architected using strict <strong>Model–View–Controller (MVC)</strong> separation:</p>
+      <p style="margin: 14px 0;"><img src="diagrams/mvc-control-panel.svg" alt="Spid3r Studio MVC Control Panel and Self-Healing Engine Diagram" style="width:100%;height:auto;border-radius:12px;display:block;"></p>
+      <ul>
+        <li><strong>Models (<code>core/gui/models/StudioModel.matrix</code> &amp; <code>core/gui/Toolchain.matrix</code>):</strong> Encapsulate the 5-tier file inventory, active project metadata, source editor buffer, dirty state, compiler diagnostics queue, notification history, vendor sync status, and 6-OS toolchain probes.</li>
+        <li><strong>Controllers (<code>core/gui/controllers/StudioController.matrix</code> &amp; <code>core/gui/Jobs.matrix</code>):</strong> Handle project creation in <code>workspace/</code>, BOM-free UTF-8 file saving, 2-pass formatting, static compilation &amp; error analysis, 1-click Auto-Recovery, background job workers, live Web/PWA server management, and log exporting.</li>
+        <li><strong>Views (<code>core/gui/Shell.matrix</code> &amp; <code>core/gui/pages/*.matrix</code>):</strong> Six dedicated desktop views plus a multi-tab bottom <strong>Console / Diagnostics / Alerts</strong> drawer:</li>
+      </ul>
+
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>1. Workspace View</h4>
+          <p>Interactive 5-tier A–Z architecture explorer, 6-OS readiness KPIs, missing dependency recommendations, project switcher, and <code>workspace/&lt;AppName&gt;</code> scaffolder.</p>
+        </div>
+        <div class="mini-card">
+          <h4>2. Code &amp; Debugger</h4>
+          <p>Built-in <code>.matrix</code> and <code>studio.json</code> editor with 1-click <strong>Save (UTF-8 no BOM)</strong>, <strong>2-Pass Format</strong>, <strong>Compile &amp; Check</strong>, line-by-line Spid3r suggestions, and <strong>Auto-Recovery</strong>.</p>
+        </div>
+        <div class="mini-card">
+          <h4>3. Platforms (6 OS)</h4>
+          <p>Build, preview, hot-reload, or deploy packages for <strong>Desktop (Win/macOS/Linux)</strong>, <strong>Web &amp; Mobile PWA</strong>, <strong>iOS (<code>.ipa</code>)</strong>, and <strong>Android (APK)</strong>.</p>
+        </div>
+        <div class="mini-card">
+          <h4>4. Downloads &amp; SDKs</h4>
+          <p>Inspects <code>downloads/</code> cache packages (<code>xtool 1.24.0</code>, <code>spid3r.wasm</code>, <code>Xcode.xip</code>) and runs 1-click installers for OpenJDK, Gradle, ADB, <code>usbipd</code>, and WSL2 Swift/USB tools.</p>
+        </div>
+        <div class="mini-card">
+          <h4>5. Tests &amp; QA</h4>
+          <p>Runs the 3-stage verification pipeline (<code>spid3r fmt --check</code>, <code>spid3r check --deny-warnings</code>, and all 5 automated test suites) or headless GUI dry-runs.</p>
+        </div>
+        <div class="mini-card">
+          <h4>6. Docs &amp; Logs</h4>
+          <p>Built-in markdown reader for <code>documents/</code>, 1-click log &amp; diagnostic JSON report exporter, framework vendor update checker, Core extension registry, and <code>bugs.html</code> inspector.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. DEVELOPER GUIDELINES -->
+    <section class="card" id="developer-guidelines">
+      <h2>3. Developer Guidelines &amp; Project Structure</h2>
+      <p>Every developer application lives inside <code>workspace/&lt;AppName&gt;/</code> and separates pure application logic (<code>app.matrix</code> + <code>pages/*.matrix</code>) from the thin native entry file (<code>main.matrix</code>) and declarative manifest (<code>studio.json</code>).</p>
+
+      <div class="grid-2">
+        <div>
+          <h3><code>app.matrix</code> (Author File — Pages &amp; Handlers)</h3>
+<pre><code>import "studio/App" as appkit;
+import "studio/Components" as ui;
+import "studio/State" as state;
+import "studio/Storage" as storage;
+
+fn boot_app() {
+    state.set("count", int(storage.get("count", 0)));
+}
+
+fn increment(_ev) {
+    let next = int(state.get_or("count", 0)) + 1;
+    state.set("count", next);
+    storage.set("count", next);
+}
+
+fn Home() -> map {
+    let n = int(state.get_or("count", 0));
+    return ui.page([
+        ui.navbar("Counter Pro"),
+        ui.card([
+            ui.title("Taps: " + string(n)),
+            ui.button("Increment", "increment", "primary"),
+        ]),
+    ]);
+}
+
+public fn studio_app() {
+    return appkit.App("Counter Pro", "com.example.counter", "1.0.0")
+        .data_dir("workspace/CounterPro/storage")
+        .page("Home", Home)
+        .handler("increment", increment)
+        .boot(boot_app);
+}</code></pre>
+        </div>
+        <div>
+          <h3><code>main.matrix</code> (5 Required Entry Shims)</h3>
+<pre><code>import "app" as appdef;
+
+fn studio_title(t: string) { gui_title(t); }
+fn studio_html(h: string) { gui_set_html(h); }
+fn studio_eval(js: string) { gui_eval(js); }
+fn studio_on(n: string, cb) { gui_on(n, cb); }
+fn studio_emit(n: string, p: string) { gui_emit(n, p); }
+
+fn main() -> int {
+    return appdef.studio_app()
+        .bridge(
+            studio_title,
+            studio_html,
+            studio_eval,
+            studio_on,
+            studio_emit
+        )
+        .run();
+}</code></pre>
+          <div class="callout">
+            <strong>Why is <code>main.matrix</code> separate?</strong><br>
+            In Spid3r v1.1.1 (<code>BUG-05</code>), the 5 native WebView functions (<code>gui_title</code>, <code>gui_set_html</code>, <code>gui_eval</code>, <code>gui_on</code>, <code>gui_emit</code>) link <strong>only</strong> in the top-level entry file. Passing them via <code>.bridge(...)</code> lets your entire app and framework compile cleanly for both Native Desktop and Web/Mobile WASM.
+          </div>
+        </div>
+      </div>
+
+      <h3>Core Engineering Best Practices</h3>
+      <ol>
+        <li><strong>Always scope <code>.data_dir(...)</code> inside your project folder:</strong> Set <code>.data_dir("workspace/&lt;AppName&gt;/storage")</code> so persistent <code>kv.json</code> files never pollute the repository root.</li>
+        <li><strong>Split multi-screen apps into <code>pages/*.matrix</code>:</strong> Export each page function as <code>public fn Detail() -&gt; map</code> and import it in <code>app.matrix</code> (`import "pages/Detail" as p_detail;`). `FlatKit.matrix` automatically resolves the dependency DAG and isolates module globals (`mod_u_pages_Detail_<var>`).</li>
+        <li><strong>Use named string handlers for async HTTP callbacks:</strong> Because Web/Android/iOS WASM runs as a stateless REPL per event, pass registered handler names (e.g. <code>http.get_async(url, "on_api_done")</code> + <code>.handler("on_api_done", on_api_done)</code>) rather than ephemeral closures for async callbacks.</li>
+        <li><strong>Provide stable <code>"key"</code> props on dynamic lists:</strong> Pass <code>{"key": "item-" + string(id)}</code> on list rows so <code>window.__studio.patch</code> morphs DOM nodes in place without losing input focus or scroll position.</li>
+      </ol>
+    </section>
+
+    <!-- 4. SPID3R & .MATRIX COMPATIBILITY RULES -->
+    <section class="card" id="spid3r-rules">
+      <h2>4. Verified Spid3r v1.1.1 &amp; <code>.matrix</code> Compatibility Rules</h2>
+      <p>Spid3r is a newly developed language with strict parser, formatter, and VM behaviors. Follow these <strong>10 mandatory rules</strong> (corresponding to verified issues <code>BUG-01</code>..<code>BUG-10</code> in <code>bugs.html</code>) whenever writing <code>.matrix</code> files:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Rule / Bug ID</th>
+            <th>Don't Write (Fails in Spid3r v1.1.1)</th>
+            <th>Do Write (Verified Pattern)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>No <code>elif</code> in Expression-Form <code>if</code></strong><br>(<code>BUG-06</code>)</td>
+            <td><code>let s = if a { "1" } elif b { "2" } else { "3" };</code><br><em>Parser fails &amp; loops 24+ times on <code>'}'</code>.</em></td>
+            <td>Declare <code>let s = "3";</code> first, then use statement-form <code>if a { s = "1"; } elif b { s = "2"; }</code>.</td>
+          </tr>
+          <tr>
+            <td><strong>No <code>if/else</code> Inside Map Literals</strong><br>(<code>BUG-10</code>)</td>
+            <td><code>let m = { "st": if ok { "yes" } else { "no" } };</code><br><em>Compiles, then crashes at runtime with <code>null is not callable</code>.</em></td>
+            <td>Bind <code>let st = if ok { "yes" } else { "no" };</code> to a local variable first, then write <code>{ "st": st }</code>.</td>
+          </tr>
+          <tr>
+            <td><strong>No Map Literal Inside Expression <code>if</code></strong><br>(<code>BUG-07</code>)</td>
+            <td><code>let m = if ok { { "a": 1 } } else { { "a": 2 } };</code><br><em>Inner <code>{</code> is misparsed as a code block.</em></td>
+            <td>Assign the map inside a statement-form <code>if / else</code> block.</td>
+          </tr>
+          <tr>
+            <td><strong>No Duplicate <code>let _ =</code> in One Scope</strong><br>(<code>BUG-09</code>)</td>
+            <td><code>let _ = fn1(); let _ = fn2();</code><br><em>Fails with <code>'_' is already declared in this scope</code>.</em></td>
+            <td>Call <code>fn1(); fn2();</code> directly as expression statements, or use distinct names (<code>_a</code>, <code>_b</code>).</td>
+          </tr>
+          <tr>
+            <td><strong>Raw Strings for JS / CSS / JSON</strong></td>
+            <td><code>let js = "function(){ return {a: 1}; }";</code><br><em>Regular strings interpolate <code>{...}</code> expressions!</em></td>
+            <td>Always use raw strings <code>r#"function(){ return {a: 1}; }"#</code> for JS, CSS, or JSON literals.</td>
+          </tr>
+          <tr>
+            <td><strong>No <code>../</code> in <code>import</code> Paths</strong><br>(<code>BUG-08</code>, <code>BUG-09</code>)</td>
+            <td><code>import "../studio/App" as appkit;</code><br><em>Rejected by semantic analyzer.</em></td>
+            <td>Use root-relative imports (<code>import "studio/App" as appkit;</code>). <code>Fs.setup_import_path()</code> configures <code>SPID3R_PATH</code> automatically.</td>
+          </tr>
+          <tr>
+            <td><strong>UTF-8 Without BOM &amp; 2-Pass <code>fmt</code></strong><br>(<code>BUG-08</code>)</td>
+            <td>Saving files with PowerShell default UTF-8 BOM.<br><em>Causes <code>spid3r fmt --check</code> to fail.</em></td>
+            <td>Save as UTF-8 without BOM (or click <strong>Save</strong> / <strong>Auto-Recover</strong> in the Control Panel) and run <code>spid3r fmt</code> twice.</td>
+          </tr>
+          <tr>
+            <td><strong>Background Thread UI Updates</strong><br>(<code>BUG-03</code>, <code>BUG-04</code>)</td>
+            <td>Calling <code>gui_eval(...)</code> directly inside <code>spawn fn()</code>.<br><em>Silently dropped by WebView2 thread.</em></td>
+            <td>Mutate <code>State</code> inside <code>spawn fn()</code> and call <code>appkit.request_render()</code> (or use <code>jobs.run_async(...)</code>).</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 5. DECLARATIVE UI COMPONENTS -->
+    <section class="card" id="components">
+      <h2>5. Declarative UI Component Reference (<code>frameworks/studio/Components.matrix</code>)</h2>
+      <p>Import <code>"studio/Components" as ui;</code> to build responsive mobile and desktop layouts. Every widget accepts an optional trailing <code>props: map</code> supporting <code>"cls"</code>, <code>"key"</code>, <code>"flex"</code>, <code>"width"</code>, <code>"gap"</code>, <code>"pad"</code>, <code>"disabled"</code>, <code>"role"</code>, and <code>"aria_label"</code>.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th>Function Signatures</th>
+            <th>Notes &amp; Variants</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Layout &amp; Containers</strong></td>
+            <td>
+              <code>ui.page(children, props = {})</code><br>
+              <code>ui.card(children, props = {})</code><br>
+              <code>ui.column(children, props = {})</code><br>
+              <code>ui.row(children, props = {})</code><br>
+              <code>ui.grid(children, cols = 2, gap = 10, props = {})</code><br>
+              <code>ui.scroll(children, props = {})</code><br>
+              <code>ui.spacer(px = 12)</code> / <code>ui.flex_spacer()</code> / <code>ui.divider()</code>
+            </td>
+            <td><code>ui.page</code> automatically hoists any child <code>ui.navbar</code> to a sticky top header. Pass <code>{"wrap": true, "gap": 8}</code> on <code>ui.row</code> for responsive flex wrapping.</td>
+          </tr>
+          <tr>
+            <td><strong>Typography &amp; Chrome</strong></td>
+            <td>
+              <code>ui.text(t, style = "body", props = {})</code><br>
+              <code>ui.title(t)</code> / <code>ui.subtitle(t)</code> / <code>ui.caption(t)</code><br>
+              <code>ui.navbar(title, actions = [])</code><br>
+              <code>ui.tabbar(tabs, active_idx)</code><br>
+              <code>ui.fab(icon, onTap, props = {})</code>
+            </td>
+            <td>Text styles: <code>"h1"</code>, <code>"h2"</code>, <code>"h3"</code>, <code>"title"</code>, <code>"subtitle"</code>, <code>"body"</code>, <code>"caption"</code>, <code>"muted"</code>, <code>"mono"</code>, <code>"bold"</code>. All text is HTML-escaped automatically.</td>
+          </tr>
+          <tr>
+            <td><strong>Buttons &amp; Chips</strong></td>
+            <td>
+              <code>ui.button(label, onTap, variant = "primary", props = {})</code><br>
+              <code>ui.iconbutton(icon, onTap, variant = "ghost", props = {})</code><br>
+              <code>ui.chip(label, onTap = null, selected = false, props = {})</code><br>
+              <code>ui.badge(label, color = "primary")</code>
+            </td>
+            <td>Button variants: <code>"primary"</code>, <code>"secondary"</code>, <code>"danger"</code>, <code>"outline"</code>, <code>"ghost"</code>. Badge colors: <code>"primary"</code>, <code>"secondary"</code>, <code>"accent"</code>, <code>"danger"</code>, <code>"success"</code>.</td>
+          </tr>
+          <tr>
+            <td><strong>Forms &amp; Inputs</strong></td>
+            <td>
+              <code>ui.form(children, onSubmit, props = {})</code><br>
+              <code>ui.input(placeholder, onInput, value = "", kind = "text", props = {})</code><br>
+              <code>ui.textarea(placeholder, onInput, value = "", props = {})</code><br>
+              <code>ui.checkbox(checked, onChange, label = "", props = {})</code><br>
+              <code>ui.select(options, value, onChange, props = {})</code><br>
+              <code>ui.segmented(options, selected_idx, onChange, props = {})</code><br>
+              <code>ui.toggle(on, onChange, props = {})</code><br>
+              <code>ui.slider(min, max, value, onInput, props = {})</code>
+            </td>
+            <td>Inputs debounce keystrokes in the browser and automatically flush pending values before any button click or form submit so fast typing is never lost.</td>
+          </tr>
+          <tr>
+            <td><strong>Feedback &amp; Overlays</strong></td>
+            <td>
+              <code>ui.progress(ratio)</code> (clamped <code>0.0..1.0</code>)<br>
+              <code>ui.spinner(size = 24, label = "Loading")</code><br>
+              <code>ui.dialog(title, message, actions = [], props = {})</code><br>
+              <code>ui.confirm(title, message, onConfirm, onCancel)</code><br>
+              <code>ui.toast(message, variant = "info", onDismiss = null)</code><br>
+              <code>ui.sheet(title, children, onDismiss = null)</code>
+            </td>
+            <td>Overlays render with proper ARIA <code>role="dialog"</code> / <code>role="status"</code> attributes and backdrop click dismissal.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 6. STATE, STORAGE, ROUTER & HTTP -->
+    <section class="card" id="state-navigation">
+      <h2>6. State, Storage, Router, Theme &amp; Host Effects</h2>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>In-Memory Reactive State (<code>studio/State</code>)</h4>
+          <ul>
+            <li><code>state.set(key, val)</code> / <code>state.get_or(key, default_val)</code></li>
+            <li><code>state.get_int(key, 0)</code> / <code>state.get_bool(key, false)</code> / <code>state.get_list(key)</code></li>
+            <li><code>state.incr(key, delta)</code> / <code>state.toggle(key)</code> / <code>state.drop(key)</code></li>
+          </ul>
+        </div>
+        <div class="mini-card">
+          <h4>Persistent Key-Value Storage (<code>studio/Storage</code>)</h4>
+          <ul>
+            <li><code>storage.set(key, val)</code> / <code>storage.get(key, default_val)</code></li>
+            <li>Atomic temp-file + rename persistence on Desktop; synced automatically to <code>localStorage</code> on Web/Android/iOS WASM.</li>
+          </ul>
+        </div>
+        <div class="mini-card">
+          <h4>Multi-Stack Router (<code>studio/Router</code>)</h4>
+          <ul>
+            <li><code>nav.push(page, params = {})</code> / <code>nav.pop()</code> / <code>nav.replace(page, params = {})</code></li>
+            <li><code>nav.param(key, default_val)</code> / <code>nav.switch_tab(idx)</code></li>
+            <li>Android hardware back button automatically pops the active tab stack when depth &gt; 1.</li>
+          </ul>
+        </div>
+        <div class="mini-card">
+          <h4>Host Effects &amp; Async HTTP (<code>studio/Bridge</code> &amp; <code>studio/Http</code>)</h4>
+          <ul>
+            <li><code>br.copy_text(str)</code>, <code>br.open_url(https_or_mailto)</code>, <code>br.haptic("light"|"medium"|"heavy")</code></li>
+            <li><code>http.get_async(url, "handler_name")</code> / <code>http.post_json_async(url, body, "handler_name")</code></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7. STUDIO.JSON CONFIGURATION -->
+    <section class="card" id="manifest">
+      <h2>7. Project Manifest (<code>studio.json</code>) Schema</h2>
+      <p>Every project in <code>workspace/</code> is configured by a single <code>studio.json</code> file at its root:</p>
+<pre><code>{
+  "name": "Studio Demo",
+  "bundleID": "sh.appstudio.demo",
+  "version": "1.0.0",
+  "entry": "main.matrix",
+  "icon": "assets/logo.svg",
+  "theme": {
+    "mode": "dark",
+    "primary": "#6366F1"
+  },
+  "android": {
+    "minSdk": 24,
+    "targetSdk": 34,
+    "versionCode": 1
+  },
+  "ios": {
+    "deploymentTarget": "16.0"
+  }
+}</code></pre>
+      <p>Any static files placed inside <code>&lt;appdir&gt;/assets/</code> are automatically copied into Web (<code>build/web/assets/</code>), Desktop (<code>build/desktop/assets/</code>), Android (<code>app/src/main/assets/assets/</code>), and iOS (<code>Resources/app/assets/</code>) builds.</p>
+    </section>
+
+    <!-- 8. 6-OS BUILD & DEPLOYMENT -->
+    <section class="card" id="platforms">
+      <h2>8. Cross-Platform Build &amp; Deployment Pipelines (6 OS)</h2>
+      <p style="margin: 14px 0;"><img src="diagrams/runtime-protocol.svg" alt="Dual-Mode Runtime Architecture and Atomic STUDIO_FRAME Protocol" style="width:100%;height:auto;border-radius:12px;display:block;"></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Platform</th>
+            <th>CLI Command</th>
+            <th>Output Location</th>
+            <th>Architecture &amp; Deployment Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Windows / macOS / Linux Desktop</strong></td>
+            <td><code>spid3r run studio.matrix build &lt;appdir&gt; --target desktop</code></td>
+            <td><code>&lt;appdir&gt;/build/desktop/&lt;Name&gt;(.exe)</code></td>
+            <td>Compiles <code>main.matrix</code> to bytecode and links a standalone native executable with embedded <code>frameworks/targets/host.html</code> and bundled runtime.</td>
+          </tr>
+          <tr>
+            <td><strong>Web &amp; Offline Mobile PWA</strong></td>
+            <td><code>spid3r run studio.matrix build &lt;appdir&gt; --target web</code></td>
+            <td><code>&lt;appdir&gt;/build/web/index.html</code></td>
+            <td>Bundles <code>frameworks/studio/*</code> + app modules via <code>FlatKit.matrix</code>, emits <code>wasmworker.js</code>, <code>spid3r.wasm</code>, <code>manifest.json</code>, and offline Service Worker <code>sw.js</code>.</td>
+          </tr>
+          <tr>
+            <td><strong>iOS Native (<code>.ipa</code> without a Mac)</strong></td>
+            <td><code>spid3r run studio.matrix ios run &lt;appdir&gt;</code></td>
+            <td><code>&lt;appdir&gt;/build/ios/&lt;SwiftName&gt;/xtool/&lt;SwiftName&gt;.ipa</code></td>
+            <td>Generates a SwiftPM package with a custom <code>WKURLSchemeHandler</code> (<code>appstudio://app/</code>), compiles arm64 Darwin code via Swift + <code>xtool 1.24.0</code>, signs with your Apple ID, and installs over USB via <code>core/tools/ios_install_ipa.py</code> (16 KB paced chunks).</td>
+          </tr>
+          <tr>
+            <td><strong>Android Native (Gradle / APK)</strong></td>
+            <td><code>spid3r run studio.matrix build &lt;appdir&gt; --target android</code></td>
+            <td><code>&lt;appdir&gt;/build/android/AndroidApp/</code></td>
+            <td>Generates a complete Kotlin + Gradle project using <code>WebViewAssetLoader</code> (<code>https://appassets.androidplatform.net/assets/index.html</code>) and hardware Back navigation. Assemble APK via <code>gradle assembleDebug</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 9. DIAGNOSTICS, QA & RECOVERY -->
+    <section class="card" id="diagnostics-recovery">
+      <h2>9. Compiler Diagnostics, Automated QA &amp; 1-Click Failure Recovery</h2>
+      <ul>
+        <li><strong>Structured Error &amp; Suggestion Engine (<code>core/Diagnostics.matrix</code>):</strong> Parses <code>error[parser]</code>, <code>error[semantic]</code>, <code>error[runtime]</code>, and formatter warnings, deduplicates parser error loops (<code>BUG-06</code>), and maps known Spid3r v1.1.1 pitfalls (<code>BUG-01</code>..<code>BUG-10</code>) to exact fix instructions in the Control Panel.</li>
+        <li><strong>Self-Healing Project Recovery (<code>core/Recovery.matrix</code>):</strong> Clicking <strong>Auto-Recover</strong> in the Control Panel strips UTF-8 BOMs across all project files, runs two-pass <code>spid3r fmt</code> convergence, synchronizes <code>vendor/studio/</code> and <code>targets/host.html</code> from <code>frameworks/</code>, clears stale lock flags, and exports diagnostic reports to <code>documents/logs/</code> and <code>documents/reports/</code>.</li>
+      </ul>
+    </section>
+
+    <!-- 10. COMPLETE CLI REFERENCE -->
+    <section class="card" id="cli-reference">
+      <h2>10. Complete CLI Command Reference</h2>
+<pre><code># Launch the Desktop MVC Control Panel GUI
+spid3r run studio.matrix gui
+
+# Scaffold a new project in workspace/
+spid3r run studio.matrix new MyApp workspace/MyApp
+
+# Preview &amp; Hot-Reload Development
+spid3r run studio.matrix run workspace/demo
+spid3r run studio.matrix dev workspace/demo
+spid3r run studio.matrix dev workspace/demo --target web --host 0.0.0.0 --port 8080
+
+# Static Analysis &amp; Multi-Platform Packaging
+spid3r run studio.matrix check workspace/demo
+spid3r run studio.matrix build workspace/demo --target web
+spid3r run studio.matrix build workspace/demo --target desktop
+spid3r run studio.matrix build workspace/demo --target android
+spid3r run studio.matrix build workspace/demo --target ios
+
+# iOS Toolchain &amp; Real-Device Deployment (xtool 1.24.0)
+spid3r run studio.matrix ios install-tools
+spid3r run studio.matrix ios sdk-install downloads/installers/Xcode_27.2.xip
+spid3r run studio.matrix ios status
+spid3r run studio.matrix ios devices
+spid3r run studio.matrix ios run workspace/demo
+spid3r run studio.matrix ios launch workspace/demo
+spid3r run studio.matrix ios uninstall workspace/demo
+
+# Verification, Maintenance &amp; Environment Audit
+spid3r run studio.matrix test
+spid3r run studio.matrix upgrade workspace/demo
+spid3r run studio.matrix clean workspace/demo [--cache]
+spid3r run studio.matrix doctor</code></pre>
+    </section>
+  </main>
+</div>
+
+<script>
+(function() {
+  var root = document.documentElement;
+  var saved = null;
+  try { saved = localStorage.getItem("studio_docs_theme"); } catch (_e) {}
+  if (saved === "dark" || (!saved && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+    root.setAttribute("data-theme", "dark");
+  }
+  var btn = document.getElementById("theme-toggle");
+  if (btn) {
+    btn.addEventListener("click", function() {
+      var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      if (next === "dark") {
+        root.setAttribute("data-theme", "dark");
+      } else {
+        root.removeAttribute("data-theme");
+      }
+      try { localStorage.setItem("studio_docs_theme", next); } catch (_e) {}
+    });
+  }
+
+  var pres = document.querySelectorAll("pre");
+  for (var i = 0; i < pres.length; i++) {
+    (function(pre) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "copy-btn";
+      b.textContent = "Copy";
+      b.addEventListener("click", function() {
+        var code = pre.querySelector("code");
+        var txt = code ? code.textContent : pre.textContent;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(txt);
+        }
+        b.textContent = "Copied!";
+        setTimeout(function() { b.textContent = "Copy"; }, 1400);
+      });
+      pre.appendChild(b);
+    })(pres[i]);
+  }
+})();
+</script>
+</body>
+</html>

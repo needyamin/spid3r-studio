@@ -1,0 +1,228 @@
+// core/Recovery.matrix
+// Self-healing failure recovery engine: UTF-8 BOM stripping, 2-pass formatter convergence,
+// vendor/studio synchronization, stale lock cleanup, and persistent diagnostic log/report export.
+
+fn trim_slash(p: string) -> string {
+    let t = string(p).replace("\\", "/");
+    while t.len() > 1 and t.ends_with("/") {
+        t = t.slice(0, t.len() - 1);
+    }
+    return t;
+}
+
+fn join_dir(a: string, b: string) -> string {
+    let ta = trim_slash(a);
+    let tb = trim_slash(b);
+    if ta == "" or ta == "." {
+        return tb;
+    }
+    if tb == "" or tb == "." {
+        return ta;
+    }
+    return ta + "/" + tb;
+}
+
+public fn strip_utf8_bom_text(raw: string) -> string {
+    let s = string(raw);
+    if s.starts_with("\u{feff}") {
+        return s.slice(3, s.len());
+    }
+    return s;
+}
+
+public fn sanitize_file_no_bom(path: string) -> bool {
+    let r = read_file(path);
+    if r.is_err() {
+        return false;
+    }
+    let raw = string(r.unwrap());
+    let clean = strip_utf8_bom_text(raw).replace("\r\n", "\n");
+    if clean != raw {
+        let wr = write_file(path, clean);
+        return wr.is_ok();
+    }
+    return true;
+}
+
+fn collect_project_matrix_files(dir: string, out: list) {
+    let ld = list_dir(dir);
+    if ld.is_err() {
+        return;
+    }
+    for item in ld.unwrap() {
+        let name = string(item);
+        let p = join_dir(dir, name);
+        if is_dir(p) {
+            if name == "build" or name == "dist" or name == ".git" or name == "storage" or name == "vendor" {
+                continue;
+            }
+            collect_project_matrix_files(p, out);
+        } elif is_file(p) and (name.ends_with(".matrix") or name == "studio.json") {
+            out.push(p);
+        }
+    }
+}
+
+/// Format a list of .matrix files twice to guarantee Spid3r v1.1.1 formatter convergence (BUG-08).
+public fn format_two_pass(matrix_files: list) -> bool {
+    if matrix_files.len() == 0 {
+        return true;
+    }
+    let args = ["fmt"];
+    for f in matrix_files {
+        let sf = string(f);
+        if sf.ends_with(".matrix") {
+            sanitize_file_no_bom(sf);
+            args.push(sf);
+        }
+    }
+    if args.len() <= 1 {
+        return true;
+    }
+    exec_capture("spid3r", args, null);
+    let r2 = exec_capture("spid3r", args, null);
+    if r2.is_err() {
+        return false;
+    }
+    return int(r2.unwrap()["code"]) == 0;
+}
+
+/// Full 1-click project recovery: strips BOMs, runs 2-pass fmt, syncs vendor/studio, removes stale flags.
+public fn recover_project(appdir: string, fw_root: string = ".") -> map {
+    let clean_dir = trim_slash(appdir);
+    let actions = [];
+    let ok = true;
+
+    if not is_dir(clean_dir) {
+        return {
+            "ok": false,
+            "actions": ["Project directory not found: " + clean_dir],
+            "files_fixed": 0,
+        };
+    }
+
+    // 1. Remove stale hot-reload / dev lock flags
+    let removed_flags = 0;
+    for flag in [
+    ".studio-reload",
+    ".studio-stop",
+    join_dir(clean_dir, ".studio-dev-done"),
+    join_dir(clean_dir, "._tmp_bundle.matrix"),
+    ] {
+        if file_exists(flag) {
+            let _ = remove_file(flag);
+            removed_flags += 1;
+        }
+    }
+    if removed_flags > 0 {
+        actions.push("Cleared " + string(removed_flags) + " stale reload/lock flag file(s)");
+    }
+
+    // 2. Strip BOMs and normalize line endings across project files
+    let files = [];
+    collect_project_matrix_files(clean_dir, files);
+    let matrix_only = [];
+    for f in files {
+        let sf = string(f);
+        sanitize_file_no_bom(sf);
+        if sf.ends_with(".matrix") {
+            matrix_only.push(sf);
+        }
+    }
+    actions.push(
+        "Sanitized UTF-8 encoding across " + string(files.len()) + " project file(s)"
+    );
+
+    // 3. Run 2-pass spid3r fmt convergence
+    if matrix_only.len() > 0 {
+        if format_two_pass(matrix_only) {
+            actions.push(
+                "Converged 2-pass spid3r fmt across " + string(matrix_only.len()) + " .matrix file(s)"
+            );
+        } else {
+            actions.push("Warning: spid3r fmt reported syntax errors in one or more files");
+            ok = false;
+        }
+    }
+
+    // 4. Sync vendor/studio and targets/host.html if project uses vendored runtime or is missing host.html
+    let studio_src = join_dir(fw_root, "frameworks/studio");
+    let vdir = join_dir(clean_dir, "vendor/studio");
+    if is_dir(vdir) and is_dir(studio_src) {
+        let ld = list_dir(studio_src);
+        let synced = 0;
+        if ld.is_ok() {
+            for item in ld.unwrap() {
+                let fname = string(item);
+                if fname.ends_with(".matrix") {
+                    let cp = copy_file(join_dir(studio_src, fname), join_dir(vdir, fname));
+                    if cp.is_ok() {
+                        synced += 1;
+                    }
+                }
+            }
+        }
+        actions.push("Synchronized " + string(synced) + " framework module(s) in vendor/studio/");
+    }
+
+    let host_src = join_dir(fw_root, "frameworks/targets/host.html");
+    let host_dst = join_dir(clean_dir, "targets/host.html");
+    if is_dir(join_dir(clean_dir, "targets")) and file_exists(host_src) {
+        copy_file(host_src, host_dst);
+        actions.push("Verified targets/host.html webview shell");
+    }
+
+    // 5. Ensure studio.json exists
+    let man_path = join_dir(clean_dir, "studio.json");
+    if not file_exists(man_path) and file_exists(join_dir(clean_dir, "app.matrix")) {
+        let fallback_man = {
+            "name": "RecoveredApp",
+            "bundleID": "com.example.recoveredapp",
+            "version": "0.1.0",
+            "entry": "main.matrix",
+        };
+        write_file(man_path, json_write(fallback_man));
+        actions.push("Recreated missing studio.json manifest");
+    }
+
+    return {
+        "ok": ok,
+        "actions": actions,
+        "files_fixed": files.len(),
+    };
+}
+
+/// Export console logs and diagnostic report into documents/logs/ and documents/reports/.
+public fn export_logs_and_report(
+    fw_root: string,
+    project: string,
+    logs_text: string,
+    diag: map
+) -> map {
+    let docs = join_dir(fw_root, "documents");
+    let logs_dir = join_dir(docs, "logs");
+    let rep_dir = join_dir(docs, "reports");
+    if not is_dir(docs) {
+        dir_create(docs);
+    }
+    if not is_dir(logs_dir) {
+        dir_create(logs_dir);
+    }
+    if not is_dir(rep_dir) {
+        dir_create(rep_dir);
+    }
+    let log_file = join_dir(logs_dir, "studio-control-panel.log");
+    let rep_file = join_dir(rep_dir, "latest-diagnostics.json");
+    let w1 = write_file(log_file, logs_text + "\n");
+    let report_payload = {
+        "project": project,
+        "diagnostics": diag,
+        "logFile": log_file,
+    };
+    let w2 = write_file(rep_file, json_write(report_payload));
+    return {
+        "ok": w1.is_ok() and w2.is_ok(),
+        "log_path": log_file,
+        "report_path": rep_file,
+    };
+}

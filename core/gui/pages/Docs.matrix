@@ -1,0 +1,141 @@
+// gui/pages/Docs.matrix
+// MVC Documents, Logs, Extensions & Updates View: browse guides/tutorials/references in documents/,
+// export persistent logs & QA reports, inspect core/Plugins extensions, and open bugs.html.
+
+import "studio/Components" as ui;
+import "studio/State" as state;
+import "studio/Bridge" as br;
+import "gui/Icons" as ico;
+import "gui/Jobs" as jobs;
+import "gui/Shell" as shell;
+import "gui/models/StudioModel" as model;
+import "gui/controllers/StudioController" as ctrl;
+
+fn ext_row(ext: map) -> map {
+    return ui.row([ui.column([ui.row([ui.text(string(ext["name"]), "subtitle"), ui.badge(string(ext["category"]), "primary"),], {
+        "gap": 6
+    }), ui.caption(string(ext["description"]) + "  (" + string(ext["module"]) + ")"),], {
+        "flex": 1
+    }), ui.badge("Active", "success"),], {
+        "cls": "cc-rec-item"
+    });
+}
+
+public fn Docs() -> map {
+    let active = string(state.get_or("active_project", "workspace/demo"));
+    let busy = state.get_or("job_busy", false) == true;
+    let docs = model.documentation_catalog();
+    let cur_doc = string(
+        state.get_or("selected_doc_path", "documents/guides/getting-started.md")
+    );
+    let doc_text = model.load_doc_content(cur_doc);
+
+    let doc_chips = [];
+    for d in docs {
+        let dp = string(d["path"]);
+        let dt = string(d["category"]) + ": " + string(d["title"]);
+        doc_chips.push(
+            ui.chip(dt, (_ev) => state.set("selected_doc_path", dp), dp == cur_doc)
+        );
+    }
+
+    let vstat = model.check_vendor_update_status(active);
+    let upd_badge = if vstat["needs_update"] == true {
+        ui.badge("Update Available", "accent")
+    } else {
+        ui.badge("Up to Date (v" + model.STUDIO_VERSION + ")", "success")
+    };
+
+    let last_log = string(
+        state.get_or("last_exported_log", "documents/logs/studio-control-panel.log")
+    );
+    let last_rep = string(
+        state.get_or("last_exported_report", "documents/reports/latest-diagnostics.json")
+    );
+
+    let ext_rows = [];
+    for ext in model.list_extensions() {
+        ext_rows.push(ext_row(ext));
+    }
+
+    let body = [
+    ui.card([ui.row([ui.row([ico.docs()], {
+        "cls": "cc-icon-box indigo"
+    }), ui.column([ui.title("Documentation, Guides & Configuration Reference (documents/)"), ui.caption(
+        "Read guides, .matrix language tutorials, and studio.json references directly inside the Control Panel."
+    ),], {
+        "flex": 1
+    }), ui.button("Copy Document", (_ev) => {
+        br.copy_text(doc_text);
+        state.set("toast_msg", "Copied " + cur_doc);
+    }, "ghost", {
+        "cls": "cc-sm"
+    }),], {
+        "gap": 10
+    }), ui.spacer(4), ui.row(doc_chips, {
+        "gap": 6, "wrap": true
+    }), ui.spacer(6), ui.row([ui.text(cur_doc, "cc-code-text")], {
+        "cls": "cc-code-box"
+    }), ui.spacer(6), ui.node("div", {
+        "cls": "cc-doc-pre"
+    }, [ui.text(doc_text, "mono")]),]),
+    ui.row([ui.card([ui.row(
+        [ui.title("Logs, QA Reports & Spid3r Bug Tracker"),
+        ui.flex_spacer(),
+        ui.badge("BUG-01..BUG-09 Verified", "primary"),
+        ]
+    ), ui.caption(
+        "Export console logs and compiler diagnostic reports to documents/logs/ and documents/reports/, or inspect bugs.html."
+    ), ui.spacer(4), ui.row([ui.text("Log: " + last_log, "cc-code-text")], {
+        "cls": "cc-code-box"
+    }), ui.spacer(4), ui.row([ui.text("Report: " + last_rep, "cc-code-text")], {
+        "cls": "cc-code-box"
+    }), ui.spacer(8), ui.row([ui.button(
+        "Export Logs & Report Now",
+        (_ev) => ctrl.export_diagnostic_logs(),
+        "primary"
+    ), ui.button(
+        "Load bugs.html in Editor",
+        (_ev) => ctrl.open_code_editor_for("bugs.html"),
+        "secondary"
+    ),], {
+        "gap": 8, "wrap": true
+    }),]), ui.card([ui.row(
+        [ui.title("Framework Updates & Project Sync"),
+        ui.flex_spacer(),
+        upd_badge,
+        ]
+    ), ui.caption(
+        "Spid3r Studio Framework v" + model.STUDIO_VERSION + " targeting Spid3r v" + model.SPID3R_TARGET_VER + "."
+    ), ui.spacer(4), ui.row([ui.text(string(vstat["detail"]), "cc-code-text")], {
+        "cls": "cc-code-box"
+    }), ui.spacer(8), ui.row([ui.button("Sync & Upgrade Project Runtime", (_ev) => {
+        jobs.run_async("Upgrade Vendor: " + active, () => {
+            let m = jobs.run_studio_cli(["upgrade", active]);
+            jobs.append_exec_logs(m);
+            state.set("vendor_status", model.check_vendor_update_status(active));
+            return int(m["code"]) == 0;
+        });
+    }, "primary", {
+        "disabled": busy
+    }), ui.button("Auto-Recover & Repair", (_ev) => ctrl.trigger_auto_recovery(active), "secondary", {
+        "disabled": busy
+    }),], {
+        "gap": 8, "wrap": true
+    }),]),], {
+        "cls": "cc-2col"
+    }),
+    ui.card([ui.title("Core Engine & Built-in Extensions (core/ & tools/)"), ui.caption(
+        "Modular internal utilities powering compilation, bundling, diagnostics, recovery, and 6-OS packaging."
+    ), ui.spacer(4), ui.column(ext_rows, {
+        "gap": 6
+    }),]),
+    ];
+
+    return shell.render_shell(
+        "Docs",
+        "Documents, Logs, Extensions & Updates",
+        "Explore guides in documents/, export diagnostic logs, manage framework updates, and inspect Core extensions.",
+        body
+    );
+}

@@ -1,0 +1,358 @@
+// gui/models/StudioModel.matrix
+// MVC Model layer for Spid3r Studio Control Panel: manages A-Z directory inventory,
+// active project & source editor buffer, diagnostics, notifications, updates, and docs.
+
+import "studio/State" as state;
+import "gui/Jobs" as jobs;
+import "core/Plugins" as plugins;
+
+public const STUDIO_VERSION = "1.2.0";
+public const SPID3R_TARGET_VER = "1.1.1";
+
+public fn init_architecture_dirs() {
+    for d in [
+    "frameworks",
+    "downloads",
+    "downloads/xtool",
+    "downloads/wasm-runtime",
+    "downloads/installers",
+    "downloads/packages",
+    "documents",
+    "documents/guides",
+    "documents/tutorials",
+    "documents/references",
+    "documents/logs",
+    "documents/reports",
+    "workspace",
+    "core",
+    ] {
+        if not is_dir(d) {
+            dir_create(d);
+        }
+    }
+}
+
+fn count_dir_files(dir: string) -> int {
+    let ld = list_dir(dir);
+    if ld.is_err() {
+        return 0;
+    }
+    let total = 0;
+    for item in ld.unwrap() {
+        let name = string(item);
+        if name == ".git" or name == "build" or name == "dist" or name.starts_with("_test_") {
+            continue;
+        }
+        let p = jobs.join_dir(dir, name);
+        if is_dir(p) {
+            total += count_dir_files(p);
+        } elif is_file(p) {
+            total += 1;
+        }
+    }
+    return total;
+}
+
+/// Summary of the 5-tier A-Z project architecture.
+public fn architecture_tiers() -> list {
+    let fw_n = count_dir_files("frameworks");
+    let dl_n = count_dir_files("downloads");
+    let doc_n = count_dir_files("documents");
+    let ws_n = count_dir_files("workspace");
+    let core_n = count_dir_files("core");
+    return [
+    {
+        "id": "frameworks",
+        "title": "1. Frameworks & SDKs",
+        "path": "frameworks/ (studio, targets, templates)",
+        "count": fw_n,
+        "summary": "Core UI components, Router, State, Theme, and 6-OS platform templates",
+        "nav": "Platforms",
+    }
+    ,
+    {
+        "id": "downloads",
+        "title": "2. Downloads & Cache",
+        "path": "downloads/ (xtool, wasm-runtime, installers)",
+        "count": dl_n,
+        "summary": "Managed xtool 1.24.0, spid3r.wasm runtime cache, Xcode_27.2.xip & packages",
+        "nav": "Doctor",
+    }
+    ,
+    {
+        "id": "documents",
+        "title": "3. Documents & Reports",
+        "path": "documents/ (guides, tutorials, logs, reports)",
+        "count": doc_n,
+        "summary": "documentation.html, guides, .matrix tutorials, build logs & QA reports",
+        "nav": "Docs",
+    }
+    ,
+    {
+        "id": "workspace",
+        "title": "4. Developer Workspace",
+        "path": "workspace/ (demo & user projects)",
+        "count": ws_n,
+        "summary": "Active developer applications, multi-page sources, assets & studio.json",
+        "nav": "Editor",
+    }
+    ,
+    {
+        "id": "core",
+        "title": "5. Core & Tools (MVC)",
+        "path": "core/ (cli, gui, tools, tests, engine)",
+        "count": core_n,
+        "summary": "Diagnostics, Recovery, Plugins, FlatKit bundler & MVC Control Panel",
+        "nav": "Tests",
+    }
+    ,
+    ];
+}
+
+fn collect_editable_files(dir: string, out: list) {
+    let ld = list_dir(dir);
+    if ld.is_err() {
+        return;
+    }
+    for item in ld.unwrap() {
+        let name = string(item);
+        let p = jobs.join_dir(dir, name);
+        if is_dir(p) {
+            if name == "build" or name == "dist" or name == ".git" or name == "storage" or name == "vendor" {
+                continue;
+            }
+            collect_editable_files(p, out);
+        } elif is_file(p) {
+            if name.ends_with(".matrix") or name == "studio.json" or name.ends_with(".toml") or name.ends_with(".md") or name.ends_with(".html") {
+                out.push(p);
+            }
+        }
+    }
+}
+
+public fn project_source_files(appdir: string) -> list {
+    let clean = jobs.trim_slash(appdir);
+    let files = [];
+    collect_editable_files(clean, files);
+    files.sort();
+    return files;
+}
+
+public fn load_editor_file(file_path: string) -> bool {
+    let clean = jobs.trim_slash(file_path);
+    let r = read_file(clean);
+    if r.is_err() {
+        return false;
+    }
+    let content = string(r.unwrap());
+    state.set("editor_file", clean);
+    state.set("editor_content", content);
+    state.set("editor_dirty", false);
+    state.set("editor_lines", string(content.split("\n").len()));
+    state.set("editor_bytes", string(content.len()));
+    return true;
+}
+
+public fn ensure_editor_loaded(appdir: string) {
+    let cur = string(state.get_or("editor_file", ""));
+    let clean_app = jobs.trim_slash(appdir);
+    if cur != "" and cur.starts_with(clean_app) and file_exists(cur) {
+        return;
+    }
+    let preferred = jobs.join_dir(clean_app, "app.matrix");
+    if file_exists(preferred) {
+        load_editor_file(preferred);
+        return;
+    }
+    let files = project_source_files(clean_app);
+    if files.len() > 0 {
+        load_editor_file(string(files[0]));
+    }
+}
+
+/// Notifications queue (newest first, capped at 25 items).
+public fn push_notification(level: string, title: string, detail: string) {
+    let existing = state.get_list("notifications");
+    let next = [
+    {
+        "level": level,
+        "title": title,
+        "detail": detail,
+    }
+    ,
+    ];
+    let i = 0;
+    while i < existing.len() and next.len() < 25 {
+        next.push(existing[i]);
+        i += 1;
+    }
+    state.set("notifications", next);
+}
+
+public fn clear_notifications() {
+    state.set("notifications", []);
+}
+
+/// Check if project's vendor/studio is outdated compared to root studio/.
+public fn check_vendor_update_status(appdir: string) -> map {
+    let clean = jobs.trim_slash(appdir);
+    let vdir = jobs.join_dir(clean, "vendor/studio");
+    if not is_dir(vdir) {
+        return {
+            "mode": "linked",
+            "needs_update": false,
+            "detail": "Uses live root studio/ framework directly (always up to date)",
+        };
+    }
+    let ld = list_dir("frameworks/studio");
+    if ld.is_err() {
+        return {
+            "mode": "vendored",
+            "needs_update": false,
+            "detail": "Vendored runtime present",
+        };
+    }
+    let outdated = 0;
+    let total = 0;
+    for item in ld.unwrap() {
+        let fname = string(item);
+        if fname.ends_with(".matrix") {
+            total += 1;
+            let src_p = jobs.join_dir("frameworks/studio", fname);
+            let dst_p = jobs.join_dir(vdir, fname);
+            if not file_exists(dst_p) or file_size(src_p) != file_size(dst_p) {
+                outdated += 1;
+            }
+        }
+    }
+    let detail_s = "All " + string(total) + " vendored studio/ modules match v" + STUDIO_VERSION;
+    if outdated > 0 {
+        detail_s = string(outdated) + " of " + string(total) + " vendored studio/ module(s) differ from core framework";
+    }
+    return {
+        "mode": "vendored",
+        "needs_update": outdated > 0,
+        "outdated_count": outdated,
+        "total_count": total,
+        "detail": detail_s,
+    };
+}
+
+/// Inspect downloads/ for cached packages and installers.
+public fn downloads_inventory() -> list {
+    let items = [];
+    let xtool_dl = "downloads/xtool/1.24.0/xtool.AppImage";
+    let has_xtool = file_exists(xtool_dl);
+    let xtool_p = if has_xtool {
+        xtool_dl
+    } else {
+        "downloads/xtool/1.24.0/"
+    };
+    let xt_status = if has_xtool {
+        "cached"
+    } else {
+        "missing"
+    };
+    let xt_lbl = if has_xtool {
+        "Verify xtool"
+    } else {
+        "Download xtool 1.24.0"
+    };
+    items.push({
+        "id": "xtool",
+        "name": "xtool 1.24.0 AppImage & SquashFS",
+        "category": "iOS Toolchain",
+        "path": xtool_p,
+        "status": xt_status,
+        "action": "install_xtool",
+        "action_label": xt_lbl,
+    });
+
+    let wasm_dl = "downloads/wasm-runtime";
+    let dl_count = count_dir_files(wasm_dl);
+    let has_wasm = dl_count >= 2;
+    let wasm_st = if has_wasm {
+        "cached"
+    } else {
+        "on-demand"
+    };
+    let wasm_lbl = if has_wasm {
+        "Refresh WASM Cache"
+    } else {
+        "Extract WASM Runtime"
+    };
+    items.push({
+        "id": "wasm-runtime",
+        "name": "Spid3r WASM Runtime (spid3r.wasm + spid3r.js)",
+        "category": "Web / Mobile WASM",
+        "path": wasm_dl,
+        "status": wasm_st,
+        "action": "cache_wasm_runtime",
+        "action_label": wasm_lbl,
+    });
+
+    let xip = string(state.get_or("ios_xip_path", ""));
+    if xip == "" and file_exists("downloads/installers/Xcode_27.2.xip") {
+        xip = "downloads/installers/Xcode_27.2.xip";
+    }
+    let xip_p = if xip != "" {
+        xip
+    } else {
+        "downloads/installers/Xcode.xip"
+    };
+    let xip_st = if xip != "" {
+        "cached"
+    } else {
+        "external"
+    };
+    items.push({
+        "id": "xcode-xip",
+        "name": "Apple Xcode.xip (Darwin iOS SDK Source)",
+        "category": "iOS Darwin SDK",
+        "path": xip_p,
+        "status": xip_st,
+        "action": "https://developer.apple.com/download/all/?q=Xcode",
+        "action_label": "Apple Developer Portal",
+    });
+
+    return items;
+}
+
+/// Built-in documentation catalog from documents/.
+public fn documentation_catalog() -> list {
+    return [
+    {
+        "id": "getting-started",
+        "title": "Getting Started & A–Z Architecture",
+        "category": "Guide",
+        "path": "documents/guides/getting-started.md",
+    }
+    ,
+    {
+        "id": "matrix-tutorial",
+        "title": "Spid3r v1.1.1 & .matrix Authoring Tutorial",
+        "category": "Tutorial",
+        "path": "documents/tutorials/matrix-language-tutorial.md",
+    }
+    ,
+    {
+        "id": "config-reference",
+        "title": "studio.json & CLI Reference",
+        "category": "Reference",
+        "path": "documents/references/configuration-reference.md",
+    }
+    ,
+    ];
+}
+
+public fn load_doc_content(path: string) -> string {
+    let r = read_file(path);
+    if r.is_err() {
+        return "Document not found: " + path;
+    }
+    return string(r.unwrap());
+}
+
+public fn list_extensions() -> list {
+    return plugins.core_extensions();
+}

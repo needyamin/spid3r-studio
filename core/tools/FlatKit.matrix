@@ -1,0 +1,1016 @@
+// tools/FlatKit.matrix
+// Lexer-aware single-pass wasm/mobile bundler for AppStudio.
+// Walks app + framework module imports recursively, prefixes top-level
+// functions/classes/globals per module while keeping class methods intact,
+// rewrites alias-qualified exports (including inside string interpolations),
+// and appends the wasm driver.
+
+fn norm_slash(p: string) -> string {
+    let t = string(p).replace("\\", "/");
+    while t.len() > 1 and t.ends_with("/") {
+        t = t.slice(0, t.len() - 1);
+    }
+    return t;
+}
+
+fn dir_of(p: string) -> string {
+    let t = norm_slash(p);
+    let parts = t.split("/");
+    if parts.len() <= 1 {
+        if t.starts_with("/") {
+            return "/";
+        }
+        return ".";
+    }
+    let last = string(parts[parts.len() - 1]);
+    return t.slice(0, t.len() - last.len() - 1);
+}
+
+fn join_p(a: string, b: string) -> string {
+    let ta = norm_slash(a);
+    let tb = norm_slash(b);
+    if ta == "" or ta == "." {
+        return tb;
+    }
+    if ta == "/" {
+        return "/" + tb;
+    }
+    return ta + "/" + tb;
+}
+
+/// Normalize relative segments like "pages/../lib/A.matrix".
+fn clean_path(p: string) -> string {
+    let t = norm_slash(p);
+    let leading_slash = t.starts_with("/");
+    let parts = t.split("/");
+    let stack = [];
+    for raw in parts {
+        let seg = string(raw);
+        if seg == "" or seg == "." {
+            continue;
+        }
+        if seg == ".." and stack.len() > 0 and string(stack[stack.len() - 1]) != ".." {
+            stack.pop();
+            continue;
+        }
+        stack.push(seg);
+    }
+    let res = stack.join("/");
+    if leading_slash {
+        return "/" + res;
+    }
+    if res == "" {
+        return ".";
+    }
+    return res;
+}
+
+fn basename_no_ext(p: string) -> string {
+    let t = norm_slash(p);
+    let parts = t.split("/");
+    let f = string(parts[parts.len() - 1]);
+    if f.ends_with(".matrix") {
+        return f.slice(0, f.len() - 7);
+    }
+    return f;
+}
+
+fn sanitize_mod_id(raw: string) -> string {
+    let out = "";
+    let s = string(raw);
+    let i = 0;
+    while i < s.len() {
+        let c = s[i];
+        if (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "_" {
+            out += c;
+        } else {
+            out += "_";
+        }
+        i += 1;
+    }
+    if out == "" {
+        return "mod";
+    }
+    return out;
+}
+
+fn read_or_fail(path: string) -> string {
+    let r = read_file(path);
+    if r.is_err() {
+        return "";
+    }
+    return string(r.unwrap());
+}
+
+fn is_ident_start(c: string) -> bool {
+    return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or c == "_";
+}
+
+fn is_ident_cont(c: string) -> bool {
+    return is_ident_start(c) or (c >= "0" and c <= "9");
+}
+
+fn is_digit(c: string) -> bool {
+    return c >= "0" and c <= "9";
+}
+
+fn is_ws(c: string) -> bool {
+    return c == " " or c == "\t" or c == "\r" or c == "\n";
+}
+
+/// Lex Spid3r source into {"kind", "text"} tokens.
+public fn tokenize(src: string) -> list {
+    let toks = [];
+    let n = src.len();
+    let i = 0;
+    while i < n {
+        let c = src[i];
+        // whitespace
+        if is_ws(c) {
+            let j = i + 1;
+            while j < n and is_ws(src[j]) {
+                j += 1;
+            }
+            toks.push({
+                "kind": "ws", "text": src.slice(i, j)
+            });
+            i = j;
+            continue;
+        }
+        // line comment
+        if c == "/" and i + 1 < n and src[i + 1] == "/" {
+            let j = i + 2;
+            while j < n and src[j] != "\n" {
+                j += 1;
+            }
+            toks.push({
+                "kind": "comment", "text": src.slice(i, j)
+            });
+            i = j;
+            continue;
+        }
+        // block comment
+        if c == "/" and i + 1 < n and src[i + 1] == "*" {
+            let j = i + 2;
+            while j + 1 < n and not (src[j] == "*" and src[j + 1] == "/") {
+                j += 1;
+            }
+            if j + 1 < n {
+                j += 2;
+            } else {
+                j = n;
+            }
+            toks.push({
+                "kind": "comment", "text": src.slice(i, j)
+            });
+            i = j;
+            continue;
+        }
+        // raw string literal: r"..." or r#"..."#
+        if c == "r" and i + 1 < n and (src[i + 1] == "\"" or src[i + 1] == "#") {
+            let hashes = 0;
+            let k = i + 1;
+            while k < n and src[k] == "#" {
+                hashes += 1;
+                k += 1;
+            }
+            if k < n and src[k] == "\"" {
+                let j = k + 1;
+                while j < n {
+                    if src[j] == "\"" {
+                        let matched = true;
+                        let h = 0;
+                        while h < hashes {
+                            if j + 1 + h >= n or src[j + 1 + h] != "#" {
+                                matched = false;
+                                break;
+                            }
+                            h += 1;
+                        }
+                        if matched {
+                            j = j + 1 + hashes;
+                            break;
+                        }
+                    }
+                    j += 1;
+                }
+                toks.push({
+                    "kind": "rawstr", "text": src.slice(i, j)
+                });
+                i = j;
+                continue;
+            }
+        }
+        // standard string literal with escapes and same-line brace-balanced { ... } interpolation
+        if c == "\"" {
+            let j = i + 1;
+            while j < n {
+                let ch = src[j];
+                if ch == "\\" and j + 1 < n {
+                    j += 2;
+                    continue;
+                }
+                if ch == "\"" {
+                    j += 1;
+                    break;
+                }
+                if ch == "{" and j + 1 < n and src[j + 1] != "\"" {
+                    let k = j + 1;
+                    let depth = 1;
+                    let hit_eol = false;
+                    while k < n and depth > 0 {
+                        let ic = src[k];
+                        if ic == "\n" {
+                            hit_eol = true;
+                            break;
+                        }
+                        if ic == "\\" and k + 1 < n {
+                            k += 2;
+                            continue;
+                        }
+                        if ic == "\"" {
+                            k += 1;
+                            while k < n and src[k] != "\n" {
+                                if src[k] == "\\" and k + 1 < n {
+                                    k += 2;
+                                    continue;
+                                }
+                                if src[k] == "\"" {
+                                    k += 1;
+                                    break;
+                                }
+                                k += 1;
+                            }
+                            continue;
+                        }
+                        if ic == "{" {
+                            depth += 1;
+                        } elif ic == "}" {
+                            depth -= 1;
+                        }
+                        k += 1;
+                    }
+                    if not hit_eol and depth == 0 {
+                        j = k;
+                        continue;
+                    }
+                }
+                j += 1;
+            }
+            toks.push({
+                "kind": "str", "text": src.slice(i, j)
+            });
+            i = j;
+            continue;
+        }
+        // identifier
+        if is_ident_start(c) {
+            let j = i + 1;
+            while j < n and is_ident_cont(src[j]) {
+                j += 1;
+            }
+            toks.push({
+                "kind": "ident", "text": src.slice(i, j)
+            });
+            i = j;
+            continue;
+        }
+        // number
+        if is_digit(c) {
+            let j = i + 1;
+            while j < n and (is_ident_cont(src[j]) or src[j] == ".") {
+                j += 1;
+            }
+            toks.push({
+                "kind": "num", "text": src.slice(i, j)
+            });
+            i = j;
+            continue;
+        }
+        // two-char arrow =>
+        if c == "=" and i + 1 < n and src[i + 1] == ">" {
+            toks.push({
+                "kind": "punct", "text": "=>"
+            });
+            i += 2;
+            continue;
+        }
+        toks.push({
+            "kind": "punct", "text": c
+        });
+        i += 1;
+    }
+    return toks;
+}
+
+fn next_sig(toks: list, idx: int) -> int {
+    let i = idx;
+    let n = toks.len();
+    while i < n {
+        let k = string(toks[i]["kind"]);
+        if k != "ws" and k != "comment" {
+            return i;
+        }
+        i += 1;
+    }
+    return -1;
+}
+
+fn unquote_str(lit: string) -> string {
+    if lit.len() < 2 {
+        return lit;
+    }
+    return lit.slice(1, lit.len() - 1);
+}
+
+/// Analyze module tokens for imports and top-level declarations (brace_depth == 0).
+fn analyze_module(toks: list, mod_id: string, is_entry: bool) -> map {
+    let imports = [];
+    let locals = {
+    };
+    let exports = {
+    };
+    let n = toks.len();
+    let depth = 0;
+    let i = 0;
+    while i < n {
+        let tok = toks[i];
+        let kind = string(tok["kind"]);
+        let text = string(tok["text"]);
+        if kind == "ws" or kind == "comment" {
+            i += 1;
+            continue;
+        }
+        if kind == "punct" {
+            if text == "{" {
+                depth += 1;
+            } elif text == "}" and depth > 0 {
+                depth -= 1;
+            }
+            i += 1;
+            continue;
+        }
+        if depth == 0 and kind == "ident" {
+            if text == "import" {
+                let p_idx = next_sig(toks, i + 1);
+                if p_idx >= 0 and string(toks[p_idx]["kind"]) == "str" {
+                    let raw_path = unquote_str(string(toks[p_idx]["text"]));
+                    let alias = basename_no_ext(raw_path);
+                    let cur = next_sig(toks, p_idx + 1);
+                    if cur >= 0 and string(toks[cur]["kind"]) == "ident" and string(toks[cur]["text"]) == "as" {
+                        let a_idx = next_sig(toks, cur + 1);
+                        if a_idx >= 0 and string(toks[a_idx]["kind"]) == "ident" {
+                            alias = string(toks[a_idx]["text"]);
+                            cur = next_sig(toks, a_idx + 1);
+                        }
+                    }
+                    let end_idx = cur;
+                    if end_idx < 0 {
+                        end_idx = n - 1;
+                    }
+                    while end_idx < n and string(toks[end_idx]["text"]) != ";" {
+                        end_idx += 1;
+                    }
+                    if end_idx >= n {
+                        end_idx = n - 1;
+                    }
+                    imports.push({
+                        "path": raw_path, "alias": alias, "start": i, "end": end_idx
+                    });
+                    i = end_idx + 1;
+                    continue;
+                }
+            } elif text == "fn" {
+                let n_idx = next_sig(toks, i + 1);
+                if n_idx >= 0 and string(toks[n_idx]["kind"]) == "ident" {
+                    let fname = string(toks[n_idx]["text"]);
+                    if not (is_entry and (fname == "studio_app" or fname == "main")) {
+                        let pfx = "pub_" + mod_id + "_" + fname;
+                        locals[fname] = pfx;
+                        exports[fname] = pfx;
+                    }
+                    i = n_idx + 1;
+                    continue;
+                }
+            } elif text == "class" {
+                let c_idx = next_sig(toks, i + 1);
+                if c_idx >= 0 and string(toks[c_idx]["kind"]) == "ident" {
+                    let cname = string(toks[c_idx]["text"]);
+                    let cpfx = "cls_" + mod_id + "_" + cname;
+                    locals[cname] = cpfx;
+                    exports[cname] = cpfx;
+                    i = c_idx + 1;
+                    continue;
+                }
+            } elif text == "let" or text == "const" {
+                let v_idx = next_sig(toks, i + 1);
+                if v_idx >= 0 and string(toks[v_idx]["kind"]) == "ident" {
+                    let vname = string(toks[v_idx]["text"]);
+                    let vpfx = "mod_" + mod_id + "_" + vname;
+                    locals[vname] = vpfx;
+                    exports[vname] = vpfx;
+                    i = v_idx + 1;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    return {
+        "imports": imports, "locals": locals, "exports": exports
+    };
+}
+
+fn is_shadowed(scopes: list, name: string) -> bool {
+    let k = scopes.len() - 1;
+    while k >= 0 {
+        if scopes[k].has(name) {
+            return true;
+        }
+        k -= 1;
+    }
+    return false;
+}
+
+fn list_has_str(xs: list, name: string) -> bool {
+    for x in xs {
+        if string(x) == name {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Extract parameter identifiers inside (...) starting at open_idx.
+fn collect_paren_params(toks: list, open_idx: int) -> list {
+    let params = [];
+    if open_idx < 0 or open_idx >= toks.len() or string(toks[open_idx]["text"]) != "(" {
+        return params;
+    }
+    let pdepth = 0;
+    let expect_param = true;
+    let i = open_idx;
+    let n = toks.len();
+    while i < n {
+        let kind = string(toks[i]["kind"]);
+        let text = string(toks[i]["text"]);
+        if kind == "ws" or kind == "comment" {
+            i += 1;
+            continue;
+        }
+        if text == "(" {
+            pdepth += 1;
+            i += 1;
+            continue;
+        }
+        if text == ")" {
+            pdepth -= 1;
+            if pdepth == 0 {
+                break;
+            }
+            i += 1;
+            continue;
+        }
+        if pdepth == 1 {
+            if text == "," {
+                expect_param = true;
+            } elif expect_param and kind == "ident" {
+                if text != "self" {
+                    params.push(text);
+                }
+                expect_param = false;
+            }
+        }
+        i += 1;
+    }
+    return params;
+}
+
+/// Find matching ')' for '(' at open_idx, or -1.
+fn match_paren(toks: list, open_idx: int) -> int {
+    let d = 0;
+    let i = open_idx;
+    let n = toks.len();
+    while i < n {
+        let t = string(toks[i]["text"]);
+        if string(toks[i]["kind"]) == "punct" {
+            if t == "(" {
+                d += 1;
+            } elif t == ")" {
+                d -= 1;
+                if d == 0 {
+                    return i;
+                }
+            }
+        }
+        i += 1;
+    }
+    return -1;
+}
+
+fn rewrite_str_token(lit: string, locals: map, alias_exports: map, scopes: list) -> string {
+    if lit.len() < 2 or not lit.contains("{") {
+        return lit;
+    }
+    let inner = lit.slice(1, lit.len() - 1);
+    let out = ["\""];
+    let n = inner.len();
+    let i = 0;
+    while i < n {
+        let c = inner[i];
+        if c == "\\" and i + 1 < n {
+            out.push(inner.slice(i, i + 2));
+            i += 2;
+            continue;
+        }
+        if c == "{" and i + 1 < n and inner[i + 1] != "\"" {
+            let j = i + 1;
+            let depth = 1;
+            let hit_eol = false;
+            while j < n and depth > 0 {
+                let ic = inner[j];
+                if ic == "\n" {
+                    hit_eol = true;
+                    break;
+                }
+                if ic == "\\" and j + 1 < n {
+                    j += 2;
+                    continue;
+                }
+                if ic == "\"" {
+                    j += 1;
+                    while j < n and inner[j] != "\n" {
+                        if inner[j] == "\\" and j + 1 < n {
+                            j += 2;
+                            continue;
+                        }
+                        if inner[j] == "\"" {
+                            j += 1;
+                            break;
+                        }
+                        j += 1;
+                    }
+                    continue;
+                }
+                if ic == "{" {
+                    depth += 1;
+                } elif ic == "}" {
+                    depth -= 1;
+                }
+                j += 1;
+            }
+            if not hit_eol and depth == 0 {
+                let expr = inner.slice(i + 1, j - 1);
+                let etoks = tokenize(expr);
+                let rew = emit_tokens(etoks, [], locals, alias_exports, scopes, 1);
+                out.push("{");
+                out.push(rew);
+                out.push("}");
+                i = j;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out.push("\"");
+    return out.join("");
+}
+
+/// Single-pass token rewriter (imports stripped, locals & aliases prefixed, scopes respected).
+fn emit_tokens(
+    toks: list,
+    imports: list,
+    locals: map,
+    alias_exports: map,
+    base_scopes: list,
+    start_depth: int
+) -> string {
+    let skip_ranges = {
+    };
+    for imp in imports {
+        skip_ranges[string(imp["start"])] = int(imp["end"]);
+    }
+    let scopes = [];
+    for sc in base_scopes {
+        scopes.push(sc);
+    }
+    let out = [];
+    let depth = start_depth;
+    let paren_depth = 0;
+    let prev_sig = "";
+    let pending_params = [];
+    let fn_paren_end = -1;
+    let in_class_hdr = false;
+    let i = 0;
+    let n = toks.len();
+
+    while i < n {
+        if skip_ranges.has(string(i)) {
+            let end_i = int(skip_ranges[string(i)]);
+            i = end_i + 1;
+            while i < n and string(toks[i]["kind"]) == "ws" {
+                if string(toks[i]["text"]).contains("\n") {
+                    out.push("\n");
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            prev_sig = ";";
+            continue;
+        }
+
+        let tok = toks[i];
+        let kind = string(tok["kind"]);
+        let text = string(tok["text"]);
+
+        if kind == "ws" or kind == "comment" {
+            out.push(text);
+            i += 1;
+            continue;
+        }
+
+        if kind == "rawstr" or kind == "num" {
+            out.push(text);
+            prev_sig = kind;
+            i += 1;
+            continue;
+        }
+
+        if kind == "str" {
+            out.push(rewrite_str_token(text, locals, alias_exports, scopes));
+            prev_sig = "str";
+            i += 1;
+            continue;
+        }
+
+        if kind == "punct" {
+            if text == "(" {
+                paren_depth += 1;
+                let close_i = match_paren(toks, i);
+                if close_i >= 0 {
+                    let after = next_sig(toks, close_i + 1);
+                    if after >= 0 and string(toks[after]["text"]) == "=>" {
+                        for pp in collect_paren_params(toks, i) {
+                            pending_params.push(pp);
+                        }
+                        if close_i > fn_paren_end {
+                            fn_paren_end = close_i;
+                        }
+                    }
+                }
+            } elif text == ")" {
+                if paren_depth > 0 {
+                    paren_depth -= 1;
+                }
+            } elif text == "{" {
+                depth += 1;
+                if in_class_hdr {
+                    in_class_hdr = false;
+                    scopes.push({
+                    });
+                } elif paren_depth == 0 or prev_sig == "=>" {
+                    fn_paren_end = -1;
+                    let sc = {
+                    };
+                    for pp in pending_params {
+                        sc[string(pp)] = true;
+                    }
+                    pending_params = [];
+                    scopes.push(sc);
+                } else {
+                    scopes.push({
+                    });
+                }
+            } elif text == "}" {
+                if depth > 0 {
+                    depth -= 1;
+                }
+                if scopes.len() > 0 {
+                    scopes.pop();
+                }
+            }
+            out.push(text);
+            prev_sig = text;
+            i += 1;
+            continue;
+        }
+
+        // identifier token
+        if kind == "ident" {
+            if text == "class" and depth == 0 {
+                in_class_hdr = true;
+            } elif text == "fn" {
+                let n_idx = next_sig(toks, i + 1);
+                if n_idx >= 0 and string(toks[n_idx]["kind"]) == "ident" {
+                    let p_idx = next_sig(toks, n_idx + 1);
+                    if p_idx >= 0 and string(toks[p_idx]["text"]) == "(" {
+                        let c_idx = match_paren(toks, p_idx);
+                        if c_idx > fn_paren_end {
+                            fn_paren_end = c_idx;
+                        }
+                        for pp in collect_paren_params(toks, p_idx) {
+                            pending_params.push(pp);
+                        }
+                    }
+                }
+            }
+
+            // shadow variable capture inside inner blocks (let/const/for/catch/arrow param)
+            if depth >= 1 and scopes.len() > 0 {
+                if text == "let" or text == "const" {
+                    let v_idx = next_sig(toks, i + 1);
+                    if v_idx >= 0 and string(toks[v_idx]["kind"]) == "ident" {
+                        scopes[scopes.len() - 1][string(toks[v_idx]["text"])] = true;
+                    }
+                } elif text == "for" {
+                    let nxt = next_sig(toks, i + 1);
+                    if nxt >= 0 {
+                        if string(toks[nxt]["kind"]) == "ident" {
+                            scopes[scopes.len() - 1][string(toks[nxt]["text"])] = true;
+                        } elif string(toks[nxt]["text"]) == "(" {
+                            for lp in collect_paren_params(toks, nxt) {
+                                scopes[scopes.len() - 1][string(lp)] = true;
+                            }
+                        }
+                    }
+                } elif text == "catch" {
+                    let nxt = next_sig(toks, i + 1);
+                    if nxt >= 0 and string(toks[nxt]["text"]) == "(" {
+                        for cp in collect_paren_params(toks, nxt) {
+                            scopes[scopes.len() - 1][string(cp)] = true;
+                        }
+                    }
+                } else {
+                    let nxt_ar = next_sig(toks, i + 1);
+                    if nxt_ar >= 0 and string(toks[nxt_ar]["text"]) == "=>" {
+                        pending_params.push(text);
+                    }
+                }
+            }
+
+            // keep parameter declarations in fn/lambda signatures unprefixed
+            if i <= fn_paren_end and prev_sig != ":" and prev_sig != "." and list_has_str(pending_params, text) {
+                out.push(text);
+                prev_sig = "ident";
+                i += 1;
+                continue;
+            }
+
+            // check alias.member qualification
+            if prev_sig != "." and alias_exports.has(text) and not is_shadowed(scopes, text) {
+                let d_idx = next_sig(toks, i + 1);
+                if d_idx >= 0 and string(toks[d_idx]["text"]) == "." {
+                    let m_idx = next_sig(toks, d_idx + 1);
+                    if m_idx >= 0 and string(toks[m_idx]["kind"]) == "ident" {
+                        let member = string(toks[m_idx]["text"]);
+                        let ex = alias_exports[text];
+                        if ex.has(member) {
+                            out.push(string(ex[member]));
+                            prev_sig = "ident";
+                            i = m_idx + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // rewrite module-local top-level symbol if not preceded by '.' and not shadowed
+            if prev_sig != "." and locals.has(text) and not is_shadowed(scopes, text) {
+                out.push(string(locals[text]));
+                prev_sig = "ident";
+                i += 1;
+                continue;
+            }
+
+            out.push(text);
+            prev_sig = "ident";
+            i += 1;
+            continue;
+        }
+
+        out.push(text);
+        prev_sig = kind;
+        i += 1;
+    }
+
+    return out.join("");
+}
+
+const DRIVER_SRC = "fn main() -> int {\n    let app = studio_app();\n    return app.wasm_run(string(STUDIO_EVENT_JSON));\n}\n";
+
+fn find_framework_dir(ad: string) -> string {
+    let vend = ad + "/vendor/studio";
+    if is_dir(vend) {
+        return vend;
+    }
+    let env_home = env("APPSTUDIO_HOME");
+    if string(env_home) != "none" {
+        let hfw = norm_slash(string(env_home.unwrap())) + "/frameworks/studio";
+        if is_dir(hfw) {
+            return hfw;
+        }
+    }
+    for cand in ["./frameworks/studio", "../frameworks/studio", "../../frameworks/studio"] {
+        if is_dir(cand) {
+            return cand;
+        }
+    }
+    return "./frameworks/studio";
+}
+
+fn rel_mod_id(ad: string, file_path: string) -> string {
+    let prefix = ad + "/";
+    let rel = file_path;
+    if rel.starts_with(prefix) {
+        rel = rel.slice(prefix.len(), rel.len());
+    }
+    if rel.ends_with(".matrix") {
+        rel = rel.slice(0, rel.len() - 7);
+    }
+    return "u_" + sanitize_mod_id(rel);
+}
+
+fn resolve_user_import(ad: string, cur_file: string, raw_path: string) -> string {
+    let rp = norm_slash(raw_path);
+    if not rp.ends_with(".matrix") {
+        rp += ".matrix";
+    }
+    let c1 = clean_path(join_p(dir_of(cur_file), rp));
+    if file_exists(c1) {
+        return c1;
+    }
+    let c2 = clean_path(join_p(ad, rp));
+    if file_exists(c2) {
+        return c2;
+    }
+    return "";
+}
+
+fn walk_user_module(
+    ad: string,
+    file_path: string,
+    is_entry: bool,
+    fw_exports: map,
+    visiting: map,
+    visited: map,
+    mod_map: map,
+    user_order: list
+) -> bool {
+    let cp = clean_path(file_path);
+    if visited.has(cp) {
+        return true;
+    }
+    if visiting.has(cp) {
+        return false;
+    }
+    visiting[cp] = true;
+
+    let src = read_or_fail(cp);
+    if src == "" {
+        return false;
+    }
+    let mod_id = rel_mod_id(ad, cp);
+    let toks = tokenize(src);
+    let analysis = analyze_module(toks, mod_id, is_entry);
+    let resolved_aliases = {
+    };
+
+    for imp in analysis["imports"] {
+        let rp = norm_slash(string(imp["path"]));
+        let alias = string(imp["alias"]);
+        let target = basename_no_ext(rp);
+        if (
+            rp.starts_with("studio/") or rp.starts_with("vendor/studio/") or rp.contains("/studio/")
+        ) and fw_exports.has(target) {
+            resolved_aliases[alias] = fw_exports[target];
+        } else {
+            let dep_path = resolve_user_import(ad, cp, rp);
+            if dep_path != "" {
+                let ok = walk_user_module(
+                    ad,
+                    dep_path,
+                    false,
+                    fw_exports,
+                    visiting,
+                    visited,
+                    mod_map,
+                    user_order
+                );
+                if ok and mod_map.has(dep_path) {
+                    resolved_aliases[alias] = mod_map[dep_path]["analysis"]["exports"];
+                }
+            }
+        }
+    }
+
+    mod_map[cp] = {
+        "file": cp,
+        "toks": toks,
+        "analysis": analysis,
+        "aliases": resolved_aliases,
+    };
+    visited[cp] = true;
+    visiting.remove(cp);
+    user_order.push(cp);
+    return true;
+}
+
+/// Flatten the app at appdir into one source (framework + user module graph + driver).
+/// Returns "" on failure.
+public fn bundle(appdir: string) -> string {
+    let ad = norm_slash(appdir);
+    let fw = find_framework_dir(ad);
+    let fw_order = [
+    "Util", "Theme", "State", "Storage", "Router",
+    "Bridge", "Components", "CSS", "Render", "ClientJS", "Http", "App",
+    ];
+
+    // Pass 1: load, lex, and analyze all framework modules
+    let fw_toks = {
+    };
+    let fw_analysis = {
+    };
+    let fw_exports = {
+    };
+    for name in fw_order {
+        let src = read_or_fail(fw + "/" + name + ".matrix");
+        if src == "" {
+            return "";
+        }
+        let toks = tokenize(src);
+        let an = analyze_module(toks, name, false);
+        fw_toks[name] = toks;
+        fw_analysis[name] = an;
+        fw_exports[name] = an["exports"];
+    }
+
+    // Pass 2: walk user module dependency graph starting from app.matrix
+    let entry_path = clean_path(join_p(ad, "app.matrix"));
+    if not file_exists(entry_path) {
+        return "";
+    }
+    let visiting = {
+    };
+    let visited = {
+    };
+    let mod_map = {
+    };
+    let user_order = [];
+    if not walk_user_module(
+        ad,
+        entry_path,
+        true,
+        fw_exports,
+        visiting,
+        visited,
+        mod_map,
+        user_order
+    ) {
+        return "";
+    }
+
+    // Pass 3: emit flattened output in a single pass per module
+    let chunks = [
+    "// AppStudio flat bundle (generated by FlatKit — do not edit)\n",
+    "// The host substitutes the sentinel envelope line below per eval.\n\n",
+    "let STUDIO_EVENT_JSON = \"\";\n\n",
+    ];
+
+    for name in fw_order {
+        let an = fw_analysis[name];
+        let aliases = {
+        };
+        for imp in an["imports"] {
+            let target = basename_no_ext(string(imp["path"]));
+            let alias = string(imp["alias"]);
+            if fw_exports.has(target) {
+                aliases[alias] = fw_exports[target];
+            }
+        }
+        chunks.push(
+            emit_tokens(fw_toks[name], an["imports"], an["locals"], aliases, [], 0)
+        );
+        chunks.push("\n\n");
+    }
+
+    for upath in user_order {
+        let rec = mod_map[upath];
+        let uan = rec["analysis"];
+        chunks.push(
+            emit_tokens(
+                rec["toks"],
+                uan["imports"],
+                uan["locals"],
+                rec["aliases"],
+                [],
+                0
+            )
+        );
+        chunks.push("\n\n");
+    }
+
+    chunks.push(DRIVER_SRC);
+    return chunks.join("");
+}

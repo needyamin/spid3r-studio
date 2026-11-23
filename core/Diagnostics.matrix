@@ -1,0 +1,188 @@
+// core/Diagnostics.matrix
+// Structured compiler and runtime error/warning detector with Spid3r v1.1.1 (.matrix) fix suggestions.
+
+fn str_find(s: string, needle: string, from: int = 0) -> int {
+    let n = s.len();
+    let nl = needle.len();
+    if nl == 0 or nl > n {
+        return -1;
+    }
+    let i = from;
+    while i <= n - nl {
+        if s.slice(i, i + nl) == needle {
+            return i;
+        }
+        i += 1;
+    }
+    return -1;
+}
+
+public fn suggestion_for_message(msg: string) -> string {
+    let low = string(msg).lower();
+    if low.contains("found keyword 'elif'") or low.contains("unexpected keyword 'else'") {
+        return "Spid3r BUG-06: Expression-form 'if ... elif ... else' is not supported. Declare 'let x = ...;' first and use statement-form 'if / elif / else'.";
+    }
+    if low.contains("found colon") and low.contains("expected ';'") {
+        return "Spid3r BUG-07: Map literals inside an expression-form 'if/else' branch are misparsed as code blocks. Assign the map inside a statement block.";
+    }
+    if low.contains("unknown name 'gui_") {
+        return "Spid3r BUG-05: gui_* natives (gui_title, gui_set_html, gui_eval, gui_on, gui_emit) only link in the entry file (main.matrix). Pass them via app.bridge(...).";
+    }
+    if low.contains("invalid module path") or low.contains("..") {
+        return "Spid3r BUG-08: Parent-relative '../' imports are rejected. Use root-relative imports with SPID3R_PATH=. or run Auto-Recover to sync vendor/studio/.";
+    }
+    if low.contains("cannot find module") or low.contains("module not found") {
+        return "Module import could not be resolved. Ensure SPID3R_PATH includes the project/framework root or click 'Auto-Recover Project' to sync vendor/studio/.";
+    }
+    if low.contains("would reformat") {
+        return "Spid3r BUG-08: File formatting or UTF-8 BOM mismatch detected. Click 'Format & Fix BOM' or 'Auto-Recover Project' to run 2-pass spid3r fmt.";
+    }
+    if low.contains("fn expects") and low.contains("got 2") {
+        return "Spid3r BUG-02: gui_on invokes callbacks with 2 arguments (event, payload). Add an optional second parameter: (ev, payload = null) => { ... }.";
+    }
+    if low.contains("unused variable") or low.contains("unused import") {
+        return "Strict '--deny-warnings' check flagged an unused binding. Prefix unused variables with '_' (e.g. 'let _ = x;') or remove the unused import.";
+    }
+    if low.contains("null is not callable") {
+        return "Spid3r BUG-10: Expression-form 'if ... { ... } else { ... }' inside a map literal value is miscompiled into a null call at runtime. Bind the 'if/else' expression to a local 'let' variable before building the map literal.";
+    }
+    if low.contains("'_' is already declared") {
+        return "Spid3r BUG-09: 'let _ = ...' is treated as a regular identifier rather than a wildcard discard. Omit 'let _ =' or use distinct variable names.";
+    }
+    return "Inspect the referenced file and line number in Code & Debugger, then run 'Compile & Check' to verify your fix.";
+}
+
+fn parse_span(line: string) -> map {
+    let arrow = str_find(line, "-->", 0);
+    if arrow < 0 {
+        return {
+            "file": "", "line": 0, "col": 0
+        };
+    }
+    let tail = line.slice(arrow + 3, line.len()).trim();
+    let parts = tail.split(":");
+    if parts.len() < 2 {
+        return {
+            "file": tail, "line": 0, "col": 0
+        };
+    }
+    let col_n = 0;
+    let line_n = 0;
+    let file_s = "";
+    if parts.len() >= 3 {
+        let c_str = string(parts[parts.len() - 1]).trim();
+        let l_str = string(parts[parts.len() - 2]).trim();
+        try {
+            line_n = int(l_str);
+            col_n = int(c_str);
+        } catch (_e) {
+            let _ = _e;
+        }
+        let end_idx = tail.len() - (l_str.len() + c_str.len() + 2);
+        if end_idx > 0 {
+            file_s = tail.slice(0, end_idx);
+        } else {
+            file_s = string(parts[0]);
+        }
+    } else {
+        file_s = string(parts[0]);
+    }
+    return {
+        "file": file_s, "line": line_n, "col": col_n
+    };
+}
+
+/// Parse compiler/runtime output into structured diagnostic records and deduplicate BUG-06 parser spam.
+public fn analyze_output(raw_output: string, default_file: string = "") -> map {
+    let items = [];
+    let seen = {
+    };
+    let err_count = 0;
+    let warn_count = 0;
+    let rows = string(raw_output).split("\n");
+    let i = 0;
+    while i < rows.len() {
+        let t = string(rows[i]).replace("\r", "").trim();
+        let is_err = t.starts_with("error[") or t.starts_with("error:");
+        let is_warn = t.starts_with("warning[") or t.starts_with("warning:");
+        if is_err or is_warn {
+            let sev = "error";
+            if is_warn {
+                sev = "warning";
+            }
+            let kind = "compiler";
+            let b1 = str_find(t, "[", 0);
+            let b2 = str_find(t, "]", b1 + 1);
+            if b1 >= 0 and b2 > b1 {
+                kind = t.slice(b1 + 1, b2);
+            }
+            let colon = str_find(t, ":", 0);
+            let msg = t;
+            if colon >= 0 and colon + 1 < t.len() {
+                msg = t.slice(colon + 1, t.len()).trim();
+            }
+            let file_s = default_file;
+            let line_n = 0;
+            let col_n = 0;
+            if i + 1 < rows.len() {
+                let next_l = string(rows[i + 1]).replace("\r", "").trim();
+                if next_l.starts_with("-->") {
+                    let sp = parse_span(next_l);
+                    if string(sp["file"]) != "" {
+                        file_s = string(sp["file"]);
+                    }
+                    line_n = int(sp["line"]);
+                    col_n = int(sp["col"]);
+                }
+            }
+            let dedup_key = sev + ":" + file_s + ":" + string(line_n) + ":" + string(col_n) + ":" + msg;
+            if not seen.has(dedup_key) {
+                seen[dedup_key] = true;
+                if is_err {
+                    err_count += 1;
+                } else {
+                    warn_count += 1;
+                }
+                items.push({
+                    "severity": sev,
+                    "category": kind,
+                    "message": msg,
+                    "file": file_s,
+                    "line": line_n,
+                    "col": col_n,
+                    "suggestion": suggestion_for_message(msg),
+                });
+            }
+        } elif t.starts_with("would reformat ") {
+            let wf = t.slice(15, t.len()).trim();
+            let dkey = "fmt:" + wf;
+            if not seen.has(dkey) {
+                seen[dkey] = true;
+                warn_count += 1;
+                items.push({
+                    "severity": "warning",
+                    "category": "formatter",
+                    "message": "File needs formatting or has a UTF-8 BOM (" + wf + ")",
+                    "file": wf,
+                    "line": 1,
+                    "col": 1,
+                    "suggestion": suggestion_for_message("would reformat"),
+                });
+            }
+        }
+        i += 1;
+    }
+
+    let status = "clean";
+    if err_count > 0 {
+        status = "error";
+    } elif warn_count > 0 {
+        status = "warning";
+    }
+    return {
+        "status": status,
+        "error_count": err_count,
+        "warning_count": warn_count,
+        "items": items,
+    };
+}

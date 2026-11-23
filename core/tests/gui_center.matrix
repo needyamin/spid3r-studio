@@ -1,0 +1,274 @@
+// tests/gui_center.matrix
+// Verification suite for Spid3r Studio MVC Control Panel (gui/), 5-tier A-Z architecture,
+// Core Diagnostics/Recovery/Plugins, and all 6 desktop views.
+
+import "studio/App" as appkit;
+import "studio/Render" as render;
+import "studio/State" as state;
+import "studio/Theme" as theme;
+import "core/Diagnostics" as diag;
+import "core/Recovery" as recovery;
+import "core/Plugins" as plugins;
+import "gui/Jobs" as jobs;
+import "gui/Toolchain" as tc;
+import "gui/models/StudioModel" as model;
+import "gui/controllers/StudioController" as ctrl;
+import "gui/app" as cc;
+import "gui/pages/Workspace" as p_ws;
+import "gui/pages/Editor" as p_ed;
+import "gui/pages/Platforms" as p_plat;
+import "gui/pages/Tests" as p_tests;
+import "gui/pages/Doctor" as p_doc;
+import "gui/pages/Docs" as p_docs;
+
+let pass_n = 0;
+let fail_n = 0;
+
+fn check(cond: bool, label: string) {
+    if cond {
+        pass_n += 1;
+    } else {
+        fail_n += 1;
+        println("FAIL: " + label);
+    }
+}
+
+fn main() -> int {
+    // 1. 5-Tier A-Z Architecture directories & catalogs
+    model.init_architecture_dirs();
+    check(is_dir("frameworks"), "Tier 1 frameworks/ directory exists");
+    check(is_dir("downloads"), "Tier 2 downloads/ directory exists");
+    check(is_dir("documents"), "Tier 3 documents/ directory exists");
+    check(is_dir("workspace"), "Tier 4 workspace/ directory exists");
+    check(is_dir("core"), "Tier 5 core/ directory exists");
+    check(file_exists("frameworks/registry.json"), "frameworks/registry.json exists");
+    check(
+        file_exists("downloads/packages/catalog.json"),
+        "downloads/packages/catalog.json exists"
+    );
+    check(
+        file_exists("documents/guides/getting-started.md") and file_exists(
+            "documents/tutorials/matrix-language-tutorial.md"
+        ),
+        "documents/ guides and tutorials exist"
+    );
+
+    let tiers = model.architecture_tiers();
+    check(tiers.len() == 5, "StudioModel.architecture_tiers returns all 5 A-Z tiers");
+
+    // 2. Core Diagnostics, Recovery & Plugins verification
+    let sample_err = "error[parser]: expected ';' after let, found keyword 'elif'\n  --> app.matrix:12:33\nerror[parser]: unexpected '}'\n  --> app.matrix:12:70\nerror[parser]: unexpected '}'\n  --> app.matrix:12:70";
+    let d_rep = diag.analyze_output(sample_err, "app.matrix");
+    check(
+        string(d_rep["status"]) == "error" and int(d_rep["error_count"]) == 2,
+        "Diagnostics deduplicates repeated BUG-06 parser errors"
+    );
+    let d_items = d_rep["items"];
+    check(
+        type_of(d_items) == "list" and d_items.len() == 2 and string(d_items[0]["suggestion"]).contains("BUG-06"),
+        "Diagnostics maps BUG-06 elif error to actionable suggestion"
+    );
+
+    let bom_stripped = recovery.strip_utf8_bom_text("hello");
+    check(bom_stripped == "hello", "Recovery strip_utf8_bom_text preserves clean UTF-8");
+
+    let exts = plugins.core_extensions();
+    check(exts.len() >= 6, "Core Plugins registry lists active engine extensions");
+
+    // 3. Non-blocking UI refresh hook & dedicated host.html check
+    appkit.request_render();
+    check(file_exists("core/gui/host.html"), "core/gui/host.html desktop stylesheet exists");
+    check(
+        file_exists("documents/documentation.html"),
+        "documents/documentation.html moved into documents/"
+    );
+
+    // 4. Project discovery & MVC Model/Controller operations
+    let projs = jobs.discover_projects();
+    let has_demo = false;
+    for p in projs {
+        if string(p) == "workspace/demo" {
+            has_demo = true;
+        }
+    }
+    check(has_demo, "discover_projects locates workspace/demo");
+
+    let info = jobs.project_info("workspace/demo");
+    check(string(info["name"]) == "Studio Demo", "project_info reads Studio Demo name");
+    check(string(info["bundle_id"]) == "sh.appstudio.demo", "project_info reads bundleID");
+
+    ctrl.switch_project("workspace/demo");
+    check(
+        string(state.get_or("editor_file", "")).contains("workspace/demo/"),
+        "StudioController.switch_project loads initial editor file"
+    );
+
+    // 5. Log buffer capping & test summary parser
+    let capped = jobs.cap_logs(["a", "b"], "c\nd\ne", 3);
+    check(
+        capped.len() == 3 and string(capped[2]) == "e",
+        "cap_logs retains newest lines within cap"
+    );
+
+    let parsed = jobs.parse_test_summary(
+        "[1/3] checking formatting across 53 files...\n  checked 53 files cleanly\npassed: 183  failed: 0\npassed: 36  failed: 0\nall 5 test suites passed."
+    );
+    check(
+        parsed["fmt_ok"] == true and parsed["check_ok"] == true,
+        "parse_test_summary detects fmt & check"
+    );
+    check(
+        int(parsed["suites"]) == 2 and int(parsed["passed"]) == 219 and parsed["all_ok"] == true,
+        "parse_test_summary counts suites & assertions"
+    );
+
+    // 6. Toolchain readiness & recommendation engine
+    let partial_checks = [
+    {
+        "id": "spid3r", "name": "Spid3r CLI", "category": "Core", "status": "ok", "detail": "1.1.1", "required_for": "All", "recommendation": "", "action_kind": "none", "action_label": "", "action_arg": "", "cmd_hint": ""
+    }
+    ,
+    {
+        "id": "wsl2", "name": "WSL2", "category": "iOS", "status": "ok", "detail": "Available", "required_for": "iOS", "recommendation": "", "action_kind": "none", "action_label": "", "action_arg": "", "cmd_hint": ""
+    }
+    ,
+    {
+        "id": "xtool", "name": "xtool 1.24.0", "category": "iOS", "status": "missing", "detail": "Not cached", "required_for": "iOS", "recommendation": "Install xtool", "action_kind": "install", "action_label": "Install", "action_arg": "install_xtool", "cmd_hint": ""
+    }
+    ,
+    {
+        "id": "swift_wsl", "name": "Swift", "category": "iOS", "status": "ok", "detail": "6.4.3", "required_for": "iOS", "recommendation": "", "action_kind": "none", "action_label": "", "action_arg": "", "cmd_hint": ""
+    }
+    ,
+    {
+        "id": "darwin_sdk", "name": "Darwin SDK", "category": "iOS", "status": "ok", "detail": "darwin", "required_for": "iOS", "recommendation": "", "action_kind": "none", "action_label": "", "action_arg": "", "cmd_hint": ""
+    }
+    ,
+    {
+        "id": "usbmuxd", "name": "usbmuxd", "category": "iOS", "status": "ok", "detail": "/usr/sbin/usbmuxd", "required_for": "iOS", "recommendation": "", "action_kind": "none", "action_label": "", "action_arg": "", "cmd_hint": ""
+    }
+    ,
+    {
+        "id": "ideviceinstaller", "name": "ideviceinstaller", "category": "iOS", "status": "ok", "detail": "/usr/bin/ideviceinstaller", "required_for": "iOS", "recommendation": "", "action_kind": "none", "action_label": "", "action_arg": "", "cmd_hint": ""
+    }
+    ,
+    {
+        "id": "usbipd", "name": "usbipd", "category": "iOS", "status": "ok", "detail": "5.3.0", "required_for": "iOS", "recommendation": "", "action_kind": "none", "action_label": "", "action_arg": "", "cmd_hint": ""
+    }
+    ,
+    {
+        "id": "apple_auth", "name": "Apple Auth", "category": "iOS", "status": "ok", "detail": "ok", "required_for": "iOS", "recommendation": "", "action_kind": "none", "action_label": "", "action_arg": "", "cmd_hint": ""
+    }
+    ,
+    {
+        "id": "java", "name": "Java JDK", "category": "Android", "status": "missing", "detail": "Not installed", "required_for": "Android", "recommendation": "Install OpenJDK", "action_kind": "install", "action_label": "Install", "action_arg": "install_jdk", "cmd_hint": ""
+    }
+    ,
+    {
+        "id": "gradle", "name": "Gradle", "category": "Android", "status": "missing", "detail": "Not installed", "required_for": "Android", "recommendation": "Install Gradle", "action_kind": "install", "action_label": "Install", "action_arg": "install_gradle", "cmd_hint": ""
+    }
+    ,
+    {
+        "id": "adb", "name": "ADB", "category": "Android", "status": "ok", "detail": "1.0.41", "required_for": "Android", "recommendation": "", "action_kind": "none", "action_label": "", "action_arg": "", "cmd_hint": ""
+    }
+    ,
+    {
+        "id": "android_home", "name": "ANDROID_HOME", "category": "Android", "status": "missing", "detail": "Not set", "required_for": "Android", "recommendation": "Download Android Studio", "action_kind": "open_url", "action_label": "Download", "action_arg": "https://developer.android.com/studio", "cmd_hint": ""
+    }
+    ,
+    ];
+    let rd = tc.evaluate_readiness(partial_checks);
+    check(
+        rd["desktop_ok"] == true and rd["web_ok"] == true,
+        "Desktop & Web ready when spid3r ok"
+    );
+    check(
+        int(rd["ios_missing"]) == 1 and rd["ios_ok"] == false,
+        "iOS detects 1 missing dependency"
+    );
+    check(
+        int(rd["android_missing"]) == 3 and rd["android_ok"] == false,
+        "Android detects 3 missing dependencies"
+    );
+    let recs = tc.build_recommendations(partial_checks);
+    check(recs.len() == 4, "build_recommendations filters exact non-ok items");
+
+    // 7. Render all 6 MVC Desktop Views cleanly (dark + light, no mobile tabbar)
+    state.set("active_project", "workspace/demo");
+    state.set("proj_info", info);
+    state.set("env_checks", partial_checks);
+    state.set("readiness", rd);
+
+    theme.mode("dark");
+    let ws_dark = render.document(p_ws.Workspace(), [], 0);
+    check(
+        ws_dark.contains("cc-shell cc-dark") and ws_dark.contains("cc-sidebar") and ws_dark.contains("cc-drawer"),
+        "Workspace renders dark desktop shell"
+    );
+    check(
+        ws_dark.contains("A–Z Architecture Separation") and not ws_dark.contains("class=\"tabbar\""),
+        "Workspace renders 5-tier A-Z architecture cards and omits mobile tabbar"
+    );
+
+    let ed_html = render.document(p_ed.Editor(), [], 0);
+    check(
+        ed_html.contains("Source Editor") and ed_html.contains("Failure Recovery"),
+        "Editor view renders source editor, diagnostics, and 1-click recovery"
+    );
+
+    theme.mode("light");
+    let pl_light = render.document(p_plat.Platforms(), [], 0);
+    check(
+        pl_light.contains("cc-shell cc-light") and pl_light.contains("cc-plat-grid") and pl_light.contains("Windows") and pl_light.contains("macOS") and pl_light.contains("Linux"),
+        "Platforms renders light 2x2 grid covering Windows, macOS, Linux, Web, iOS, and Android"
+    );
+
+    let ts_html = render.document(p_tests.Tests(), [], 0);
+    check(
+        ts_html.contains("Full Verification Pipeline"),
+        "Tests page renders verification KPIs and suites"
+    );
+
+    let dc_html = render.document(p_doc.Doctor(), [], 0);
+    check(
+        dc_html.contains("Dedicated Downloads Directory") and dc_html.contains("cc-doc-row"),
+        "Downloads & Doctor view renders downloads/ inventory and dependency checks"
+    );
+
+    let docs_html = render.document(p_docs.Docs(), [], 0);
+    check(
+        docs_html.contains("Documentation, Guides") and docs_html.contains("Core Engine"),
+        "Docs & Logs view renders documents/ reader, log exporter, and Core extensions"
+    );
+
+    // 8. Export logs & diagnostic report to documents/logs/ and documents/reports/
+    ctrl.export_diagnostic_logs();
+    check(
+        file_exists("documents/logs/studio-control-panel.log") and file_exists("documents/reports/latest-diagnostics.json"),
+        "export_diagnostic_logs writes log and JSON report into documents/"
+    );
+
+    let rc = cc.studio_app().wasm_run("");
+    check(rc == 0, "Control Panel studio_app().wasm_run('') exits 0");
+    check(
+        string(state.get_or("active_project", "")) != "",
+        "boot_control_center sets active_project"
+    );
+
+    let theme_ev = "{\"event\":{\"sid\":\"flip_theme\",\"kind\":\"tap\",\"value\":null,\"arg\":null},\"theme\":{\"mode\":\"dark\"}}";
+    let rc_flip = cc.studio_app().wasm_run(theme_ev);
+    check(
+        rc_flip == 0 and string(theme.token("mode")) == "light",
+        "Control Panel flip_theme click toggles dark to light"
+    );
+
+    if is_dir("storage") {
+        dir_remove("storage");
+    }
+    println("gui_center passed: " + string(pass_n) + "  failed: " + string(fail_n));
+    return if fail_n == 0 {
+        0
+    } else {
+        1
+    };
+}

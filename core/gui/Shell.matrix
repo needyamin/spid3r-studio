@@ -1,0 +1,402 @@
+// gui/Shell.matrix
+// Desktop Spid3r Studio Control Panel shell (MVC View Frame): fixed left sidebar with 6 views,
+// top action header, scrollable workspace, and multi-tab bottom Console/Diagnostics/Notifications drawer.
+
+import "studio/Components" as ui;
+import "studio/State" as state;
+import "studio/Router" as nav;
+import "studio/Theme" as theme;
+import "studio/Bridge" as br;
+import "gui/Icons" as ico;
+import "gui/Jobs" as jobs;
+import "gui/Toolchain" as tc;
+import "gui/models/StudioModel" as model;
+import "gui/controllers/StudioController" as ctrl;
+
+fn nav_item(
+    id: string,
+    label: string,
+    icon_node: map,
+    active_tab: string,
+    pill_text: string = "",
+    pill_color: string = "primary"
+) -> map {
+    let cls = "cc-nav-item";
+    if id == active_tab {
+        cls += " active";
+    }
+    let kids = [
+    ui.row([icon_node], {
+        "cls": "cc-nav-ico"
+    }),
+    ui.text(label, "cc-nav-label"),
+    ];
+    if pill_text != "" {
+        kids.push(ui.badge(pill_text, pill_color));
+    }
+    return ui.row(kids, {
+        "cls": cls, "onTap": (_ev) => nav.replace(id)
+    });
+}
+
+fn render_drawer() -> map {
+    let busy = state.get_or("job_busy", false) == true;
+    let status = string(state.get_or("job_status", "idle"));
+    let title = string(state.get_or("job_title", "Ready"));
+    let show = state.get_or("show_console", false) == true;
+    let web_on = state.get_or("web_running", false) == true;
+    let d_tab = string(state.get_or("drawer_tab", "console"));
+
+    let diag_rep = state.get_or("last_diagnostics", {
+        "status": "clean", "error_count": 0, "warning_count": 0, "items": []
+    });
+    if type_of(diag_rep) != "map" {
+        diag_rep = {
+            "status": "clean", "error_count": 0, "warning_count": 0, "items": []
+        };
+    }
+    let err_n = int(diag_rep["error_count"]);
+    let warn_n = int(diag_rep["warning_count"]);
+    let notifs = state.get_list("notifications");
+
+    let dot_cls = "cc-dot ok";
+    let b_color = "primary";
+    let b_text = "Idle";
+    if busy {
+        dot_cls = "cc-dot warn";
+        b_color = "accent";
+        b_text = "Running";
+    } elif status == "ok" {
+        dot_cls = "cc-dot ok";
+        b_color = "success";
+        b_text = "Success";
+    } elif status == "error" or err_n > 0 {
+        dot_cls = "cc-dot err";
+        b_color = "danger";
+        b_text = "Error";
+    }
+
+    let left_kids = [
+    ui.row([ico.terminal()], {
+        "cls": "cc-nav-ico"
+    }),
+    ui.node("div", {
+        "cls": dot_cls
+    }, []),
+    ui.badge(b_text, b_color),
+    ui.button("Console", (_ev) => {
+        state.set("drawer_tab", "console");
+        state.set("show_console", true);
+    }, if d_tab == "console" {
+        "secondary"
+    } else {
+        "ghost"
+    }, {
+        "cls": "cc-sm"
+    }),
+    ui.button("Diagnostics (" + string(err_n + warn_n) + ")", (_ev) => {
+        state.set("drawer_tab", "diagnostics");
+        state.set("show_console", true);
+    }, if d_tab == "diagnostics" {
+        "secondary"
+    } else {
+        "ghost"
+    }, {
+        "cls": "cc-sm"
+    }),
+    ui.button("Alerts (" + string(notifs.len()) + ")", (_ev) => {
+        state.set("drawer_tab", "notifications");
+        state.set("show_console", true);
+    }, if d_tab == "notifications" {
+        "secondary"
+    } else {
+        "ghost"
+    }, {
+        "cls": "cc-sm"
+    }),
+    ui.caption(title),
+    ];
+    if busy {
+        left_kids.push(ui.spinner(16, "Running"));
+    }
+
+    let right_kids = [];
+    if status == "error" or err_n > 0 {
+        right_kids.push(ui.button("Auto-Recover", (_ev) => ctrl.trigger_auto_recovery(), "primary", {
+            "cls": "cc-sm", "disabled": busy
+        }));
+    }
+    if web_on {
+        let wp = string(state.get_or("web_port", "8080"));
+        right_kids.push(ui.button("Stop Web :" + wp, (_ev) => jobs.stop_web_server(), "danger", {
+            "cls": "cc-sm"
+        }));
+    }
+    right_kids.push(ui.button("Export Logs", (_ev) => ctrl.export_diagnostic_logs(), "ghost", {
+        "cls": "cc-sm"
+    }));
+    right_kids.push(ui.button("Copy", (_ev) => {
+        br.copy_text(jobs.logs_text());
+        state.set("toast_msg", "Logs copied to clipboard");
+    }, "ghost", {
+        "cls": "cc-sm"
+    }));
+    right_kids.push(ui.button("Clear", (_ev) => {
+        if d_tab == "notifications" {
+            model.clear_notifications();
+        } else {
+            jobs.clear_logs();
+        }
+    }, "ghost", {
+        "cls": "cc-sm"
+    }));
+    right_kids.push(ui.button(if show {
+        "Collapse"
+    } else {
+        "Expand"
+    }, (_ev) => state.set("show_console", not (state.get_or("show_console", false) == true)), "secondary", {
+        "cls": "cc-sm"
+    }));
+
+    let drawer_kids = [
+    ui.row([ui.row(left_kids, {
+        "gap": 6
+    }), ui.flex_spacer(), ui.row(right_kids, {
+        "gap": 6
+    }),], {
+        "cls": "cc-drawer-bar"
+    }),
+    ];
+    if show {
+        if d_tab == "diagnostics" {
+            let d_items = diag_rep["items"];
+            let d_lines = [];
+            if type_of(d_items) == "list" and d_items.len() > 0 {
+                for di in d_items {
+                    let loc = string(di["file"]);
+                    if int(di["line"]) > 0 {
+                        loc += ":" + string(di["line"]) + ":" + string(di["col"]);
+                    }
+                    d_lines.push(
+                        "[" + string(di["severity"]).upper() + " | " + string(di["category"]) + "] "
+                        + loc + " — " + string(di["message"]) + "\n  Suggestion: " + string(di["suggestion"])
+                    );
+                }
+            } else {
+                d_lines.push(
+                    "No compiler or runtime diagnostics detected. Click 'Compile & Check' in Code & Debugger to analyze project files."
+                );
+            }
+            let d_txt = "";
+            let k = 0;
+            while k < d_lines.len() {
+                if k > 0 {
+                    d_txt += "\n\n";
+                }
+                d_txt += string(d_lines[k]);
+                k += 1;
+            }
+            drawer_kids.push(ui.column([ui.text(d_txt, "mono")], {
+                "cls": "cc-drawer-body"
+            }));
+        } elif d_tab == "notifications" {
+            let n_txt = "";
+            if notifs.len() == 0 {
+                n_txt = "(no notifications yet)";
+            } else {
+                let ni = 0;
+                while ni < notifs.len() {
+                    let nm = notifs[ni];
+                    if type_of(nm) == "map" {
+                        if ni > 0 {
+                            n_txt += "\n";
+                        }
+                        n_txt += "[" + string(nm["level"]).upper() + "] " + string(nm["title"]) + " — " + string(nm["detail"]);
+                    }
+                    ni += 1;
+                }
+            }
+            drawer_kids.push(ui.column([ui.text(n_txt, "mono")], {
+                "cls": "cc-drawer-body"
+            }));
+        } else {
+            drawer_kids.push(ui.column([ui.text(jobs.logs_text(), "mono")], {
+                "cls": "cc-drawer-body"
+            }));
+        }
+    }
+    return ui.column(drawer_kids, {
+        "cls": "cc-drawer"
+    });
+}
+
+public fn render_shell(
+    active_tab: string,
+    heading: string,
+    subheading: string,
+    body_kids: list
+) -> map {
+    let mode = string(theme.tokens()["mode"]);
+    let shell_cls = if mode == "light" {
+        "cc-shell cc-light"
+    } else {
+        "cc-shell cc-dark"
+    };
+
+    let active_proj = string(state.get_or("active_project", "workspace/demo"));
+    let info = state.get_or("proj_info", null);
+    if info == null or type_of(info) != "map" {
+        info = jobs.project_info(active_proj);
+    }
+    let checks = state.get_list("env_checks");
+    let rd = state.get_or("readiness", {
+        "total_ok": 0, "total_issues": 0
+    });
+    if type_of(rd) != "map" {
+        rd = {
+            "total_ok": 0, "total_issues": 0
+        };
+    }
+    let ok_n = int(rd["total_ok"]);
+    let iss_n = int(rd["total_issues"]);
+    let total_n = ok_n + iss_n;
+    let ratio = 1.0;
+    if total_n > 0 {
+        ratio = float(ok_n) / float(total_n);
+    }
+
+    let doc_pill = "";
+    let doc_color = "success";
+    if checks.len() == 0 {
+        doc_pill = "...";
+        doc_color = "primary";
+    } elif iss_n > 0 {
+        doc_pill = string(iss_n);
+        doc_color = "accent";
+    }
+
+    let plat_pill = "6 OS";
+    let plat_color = "primary";
+    if state.get_or("web_running", false) == true {
+        plat_pill = "LIVE";
+        plat_color = "success";
+    }
+
+    let diag_rep = state.get_or("last_diagnostics", null);
+    let ed_pill = "";
+    let ed_color = "primary";
+    if diag_rep != null and type_of(diag_rep) == "map" {
+        let ec = int(diag_rep["error_count"]);
+        if ec > 0 {
+            ed_pill = string(ec) + " err";
+            ed_color = "danger";
+        }
+    }
+    if ed_pill == "" and state.get_or("editor_dirty", false) == true {
+        ed_pill = "edit";
+        ed_color = "accent";
+    }
+
+    let busy = state.get_or("job_busy", false) == true;
+    let theme_lbl = if mode == "dark" {
+        "Light Mode"
+    } else {
+        "Dark Mode"
+    };
+    let theme_ico = if mode == "dark" {
+        ico.sun()
+    } else {
+        ico.moon()
+    };
+
+    // Left Sidebar (MVC Navigation across 6 Views)
+    let sidebar = ui.column([ui.row([ui.row([ico.logo()], {
+        "cls": "cc-brand-icon"
+    }), ui.column([ui.text("Spid3r Studio", "cc-brand-name"), ui.text(
+        "MVC Control Panel v" + model.STUDIO_VERSION,
+        "cc-brand-sub"
+    ),], {
+        "gap": 1
+    }),], {
+        "cls": "cc-brand"
+    }), ui.column([ui.text("ACTIVE WORKSPACE", "cc-proj-label"), ui.text(string(info["name"]), "cc-proj-name"), ui.text(active_proj, "cc-proj-path"),], {
+        "cls": "cc-proj-pill"
+    }), ui.column([nav_item("Workspace", "Workspace", ico.workspace(), active_tab), nav_item(
+        "Editor",
+        "Code & Debugger",
+        ico.code(),
+        active_tab,
+        ed_pill,
+        ed_color
+    ), nav_item(
+        "Platforms",
+        "Platforms (6 OS)",
+        ico.platforms(),
+        active_tab,
+        plat_pill,
+        plat_color
+    ), nav_item(
+        "Doctor",
+        "Downloads & SDKs",
+        ico.download(),
+        active_tab,
+        doc_pill,
+        doc_color
+    ), nav_item("Tests", "Tests & QA", ico.tests(), active_tab), nav_item(
+        "Docs",
+        "Docs & Logs",
+        ico.docs(),
+        active_tab
+    ),], {
+        "cls": "cc-nav-list"
+    }), ui.column([ui.row([ui.caption("Environment"), ui.flex_spacer(), ui.caption(if checks.len() == 0 {
+        "Scanning..."
+    } else {
+        string(ok_n) + "/" + string(total_n) + " ready"
+    }),]), ui.progress(ratio), ui.row([ui.button(theme_lbl, "flip_theme", "secondary", {
+        "cls": "cc-sm", "flex": 1
+    }),], {
+        "gap": 6
+    }),], {
+        "cls": "cc-sidebar-foot"
+    }),], {
+        "cls": "cc-sidebar"
+    });
+    let _ = theme_ico;
+
+    // Top Header Bar
+    let topbar = ui.row([ui.column([ui.text(heading, "cc-top-title"), ui.text(subheading, "cc-top-sub"),], {
+        "gap": 1, "flex": 1
+    }), ui.row([ui.button("Run Preview", (_ev) => jobs.launch_native_preview(active_proj), "primary", {
+        "cls": "cc-sm"
+    }), ui.button("Compile & Check", (_ev) => ctrl.compile_and_diagnose_project(active_proj), "secondary", {
+        "cls": "cc-sm", "disabled": busy
+    }), ui.button("Auto-Recover", (_ev) => ctrl.trigger_auto_recovery(active_proj), "outline", {
+        "cls": "cc-sm", "disabled": busy
+    }), ui.button("Rescan", (_ev) => tc.trigger_rescan(), "ghost", {
+        "cls": "cc-sm", "disabled": busy
+    }),], {
+        "gap": 8
+    }),], {
+        "cls": "cc-topbar"
+    });
+
+    // Main Workspace Column
+    let main_area = ui.column([ui.column(body_kids, {
+        "cls": "cc-container"
+    }),], {
+        "cls": "cc-main"
+    });
+
+    let right_col = ui.column([topbar, main_area, render_drawer(),], {
+        "cls": "cc-workspace"
+    });
+
+    let shell = ui.row([sidebar, right_col], {
+        "cls": shell_cls
+    });
+
+    return ui.node("page", {
+        "cls": "cc-root flush"
+    }, [shell]);
+}

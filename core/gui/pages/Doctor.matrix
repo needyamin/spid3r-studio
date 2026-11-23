@@ -1,0 +1,218 @@
+// gui/pages/Doctor.matrix
+// MVC Downloads, SDKs & Doctor View: manages downloads/ packages (xtool 1.24.0, spid3r.wasm cache,
+// Xcode.xip, JDK, Gradle, ADB, usbipd), probes toolchain health, and runs 1-click installs.
+
+import "studio/Components" as ui;
+import "studio/State" as state;
+import "studio/Bridge" as br;
+import "gui/Icons" as ico;
+import "gui/Toolchain" as tc;
+import "gui/Shell" as shell;
+import "gui/models/StudioModel" as model;
+import "gui/controllers/StudioController" as ctrl;
+
+fn download_pkg_row(pkg: map, busy: bool) -> map {
+    let st = string(pkg["status"]);
+    let b_col = "success";
+    let b_txt = "Cached in downloads/";
+    if st == "missing" {
+        b_col = "danger";
+        b_txt = "Not Downloaded";
+    } elif st == "on-demand" {
+        b_col = "primary";
+        b_txt = "On-Demand Cache";
+    } elif st == "external" {
+        b_col = "accent";
+        b_txt = "External Archive";
+    }
+    let act = string(pkg["action"]);
+    let act_lbl = string(pkg["action_label"]);
+    return ui.row([ui.row([ico.download()], {
+        "cls": "cc-icon-box cyan"
+    }), ui.column([ui.row([ui.text(string(pkg["name"]), "subtitle"), ui.badge(string(pkg["category"]), "primary"),], {
+        "gap": 6
+    }), ui.text(string(pkg["path"]), "mono"),], {
+        "flex": 1, "gap": 2
+    }), ui.badge(b_txt, b_col), ui.button(act_lbl, (_ev) => {
+        if act == "cache_wasm_runtime" {
+            ctrl.cache_wasm_runtime_to_downloads();
+        } else {
+            tc.run_tool_action(act);
+        }
+    }, "secondary", {
+        "cls": "cc-sm", "disabled": busy
+    }),], {
+        "cls": "cc-rec-item"
+    });
+}
+
+fn check_row(item: map, busy: bool) -> map {
+    let st = string(item["status"]);
+    let pill_color = "success";
+    let pill_label = "Installed";
+    let dot_cls = "cc-dot ok";
+    if st == "missing" {
+        pill_color = "danger";
+        pill_label = "Missing";
+        dot_cls = "cc-dot err";
+    } elif st == "action" {
+        pill_color = "accent";
+        pill_label = "Action Needed";
+        dot_cls = "cc-dot warn";
+    }
+
+    let act_kind = string(item["action_kind"]);
+    let act_lbl = string(item["action_label"]);
+    let act_arg = string(item["action_arg"]);
+    let hint = string(item["cmd_hint"]);
+
+    let actions = [];
+    if act_kind != "none" and act_lbl != "" {
+        actions.push(ui.button(act_lbl, (_ev) => tc.run_tool_action(act_arg), if st == "missing" {
+            "primary"
+        } else {
+            "secondary"
+        }, {
+            "cls": "cc-sm", "disabled": busy and act_kind == "install"
+        }));
+    }
+    if hint != "" {
+        actions.push(ui.button("Copy Cmd", (_ev) => {
+            br.copy_text(hint);
+            state.set("toast_msg", "Copied: " + hint);
+        }, "ghost", {
+            "cls": "cc-sm"
+        }));
+    }
+
+    let top = ui.row([ui.node("div", {
+        "cls": dot_cls
+    }, []), ui.column([ui.row([ui.text(string(item["name"]), "subtitle"), ui.badge(string(item["category"]), "primary"),], {
+        "gap": 6
+    }), ui.caption(
+        string(item["detail"]) + "  —  Blocks: " + string(item["required_for"])
+    ),], {
+        "flex": 1
+    }), ui.badge(pill_label, pill_color), ui.row(actions, {
+        "gap": 6
+    }),], {
+        "gap": 10, "wrap": true
+    });
+
+    let kids = [top];
+    if st != "ok" {
+        kids.push(ui.text("Recommendation: " + string(item["recommendation"]), "muted"));
+    }
+    return ui.column(kids, {
+        "cls": "cc-doc-row", "key": "doc-" + string(item["id"])
+    });
+}
+
+public fn Doctor() -> map {
+    let busy = state.get_or("job_busy", false) == true;
+    let checks = state.get_list("env_checks");
+    let filt_s = string(state.get_or("doc_filter", "0"));
+    let filt = 0;
+    if filt_s == "1" {
+        filt = 1;
+    } elif filt_s == "2" {
+        filt = 2;
+    }
+
+    let rd = state.get_or("readiness", {
+        "total_ok": 0, "total_issues": 0
+    });
+    if type_of(rd) != "map" {
+        rd = {
+            "total_ok": 0, "total_issues": 0
+        };
+    }
+    let ok_n = int(rd["total_ok"]);
+    let iss_n = int(rd["total_issues"]);
+    let total_n = ok_n + iss_n;
+    let ratio = 1.0;
+    if total_n > 0 {
+        ratio = float(ok_n) / float(total_n);
+    }
+
+    let filtered = [];
+    for c in checks {
+        if type_of(c) != "map" {
+            continue;
+        }
+        let is_ok = string(c["status"]) == "ok";
+        if filt == 0 or (filt == 1 and not is_ok) or (filt == 2 and is_ok) {
+            filtered.push(c);
+        }
+    }
+
+    let dl_rows = [];
+    for pkg in model.downloads_inventory() {
+        dl_rows.push(download_pkg_row(pkg, busy));
+    }
+
+    let body = [
+    ui.card([ui.row([ui.column([ui.title("Dedicated Downloads Directory (downloads/)"), ui.caption(
+        "Stores large toolchains (xtool 1.24.0), cached spid3r.wasm runtime assets, SDK archives (Xcode.xip), and package catalogs."
+    ),], {
+        "flex": 1
+    }), ui.badge("downloads/packages/catalog.json", "primary"),]), ui.spacer(4), ui.column(dl_rows, {
+        "gap": 6
+    }),]),
+    ui.card([ui.row([ui.column([ui.title("Environment Readiness & 1-Click Dependency Installer"), ui.caption(
+        "Audits Desktop (Windows/macOS/Linux), Web, iOS (.ipa), and Android dependencies and provides 1-click installs."
+    ),], {
+        "flex": 1
+    }), ui.badge(string(ok_n) + " ok  |  " + string(iss_n) + " missing/action", if iss_n == 0 {
+        "success"
+    } else {
+        "accent"
+    }), ui.button("Rescan Now", (_ev) => tc.trigger_rescan(), "primary", {
+        "cls": "cc-sm", "disabled": busy
+    }),], {
+        "gap": 10, "wrap": true
+    }), ui.spacer(6), ui.progress(ratio), ui.spacer(8), ui.segmented(
+        ["All Checks",
+        "Missing / Action",
+        "Installed"],
+        filt,
+        (_ev) => state.set("doc_filter", string(_ev["arg"]))
+    ),]),
+    ];
+
+    if checks.len() == 0 {
+        body.push(ui.card([ui.row([ui.spinner(20, "Scanning"), ui.text(
+            "Probing local toolchains, WSL2, USB devices, and Android SDK...",
+            "subtitle"
+        ),], {
+            "gap": 10
+        }),]));
+    } elif filtered.len() == 0 {
+        body.push(
+            ui.card(
+                [
+                ui.empty(
+                    "&#9989;",
+                    "No items match this filter",
+                    "Try switching to All Checks above."
+                ),
+                ]
+            )
+        );
+    } else {
+        let rows = [];
+        for item in filtered {
+            rows.push(check_row(item, busy));
+        }
+        body.push(ui.column(rows, {
+            "gap": 8
+        }));
+    }
+
+    return shell.render_shell(
+        "Doctor",
+        "Downloads, SDKs & Dependency Doctor",
+        "Manage downloads/ cache packages, inspect cross-platform dependencies, and run 1-click installers.",
+        body
+    );
+}

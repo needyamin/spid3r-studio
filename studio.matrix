@@ -1,22 +1,22 @@
 // studio.matrix
 // AppStudio CLI entry — routes subcommands to focused modules in cli/.
 
-import "studio/ClientJS" as clientjs;
-import "tools/FlatKit" as flatkit;
-import "cli/Args" as args_cli;
-import "cli/Fs" as fs;
-import "cli/Exec" as ex;
-import "cli/Manifest" as man;
-import "cli/New" as c_new;
-import "cli/RunDev" as c_run;
-import "cli/Doctor" as c_doc;
-import "cli/Dx" as c_dx;
-import "cli/DevWeb" as c_dev_web;
-import "cli/IosToolchain" as c_ios;
-import "cli/BuildWeb" as b_web;
-import "cli/BuildDesktop" as b_desk;
-import "cli/BuildAndroid" as b_and;
-import "cli/BuildIos" as b_ios;
+import "frameworks/studio/ClientJS" as clientjs;
+import "core/tools/FlatKit" as flatkit;
+import "core/cli/Args" as args_cli;
+import "core/cli/Fs" as fs;
+import "core/cli/Exec" as ex;
+import "core/cli/Manifest" as man;
+import "core/cli/New" as c_new;
+import "core/cli/RunDev" as c_run;
+import "core/cli/Doctor" as c_doc;
+import "core/cli/Dx" as c_dx;
+import "core/cli/DevWeb" as c_dev_web;
+import "core/cli/IosToolchain" as c_ios;
+import "core/cli/BuildWeb" as b_web;
+import "core/cli/BuildDesktop" as b_desk;
+import "core/cli/BuildAndroid" as b_and;
+import "core/cli/BuildIos" as b_ios;
 
 fn cmd_build(appdir: string, target: string, outdir: string) -> int {
     let entry = man.find_entry(appdir);
@@ -81,8 +81,8 @@ fn main() -> int {
     if cmd == "gui" {
         fs.setup_import_path();
         let g_root = fs.abs_path(fs.fw_root());
-        let g_entry = fs.abs_path(fs.join_dir(fs.fw_root(), "gui/main.matrix"));
-        let g_host = fs.abs_path(fs.join_dir(fs.fw_root(), "gui/host.html"));
+        let g_entry = fs.abs_path(fs.join_dir(fs.fw_root(), "core/gui/main.matrix"));
+        let g_host = fs.abs_path(fs.join_dir(fs.fw_root(), "core/gui/host.html"));
         let extra = if rest.len() > 0 {
             string(rest[0]).trim()
         } else {

@@ -1,0 +1,70 @@
+// core/Plugins.matrix
+// Registry of Core Engine Extensions, Bundlers, Target Compilers, and Diagnostic Analyzers.
+
+public fn core_extensions() -> list {
+    return [
+    {
+        "id": "flatkit-bundler",
+        "name": "FlatKit Lexer-Aware Multi-File Bundler",
+        "module": "core/tools/FlatKit.matrix",
+        "category": "Compiler & Bundler",
+        "status": "active",
+        "description": "Isolates module symbols (mod_<Mod>_<var>) and bundles frameworks/studio/* + app pages into a self-contained WASM module.",
+    }
+    ,
+    {
+        "id": "diagnostics-engine",
+        "name": "Spid3r v1.1.1 Diagnostics & Suggestion Engine",
+        "module": "core/Diagnostics.matrix",
+        "category": "Debugger & QA",
+        "status": "active",
+        "description": "Parses parser, semantic, formatter, and runtime errors and maps BUG-01..BUG-10 traps to actionable code fixes.",
+    }
+    ,
+    {
+        "id": "recovery-engine",
+        "name": "Automated Project Self-Healing & Recovery",
+        "module": "core/Recovery.matrix",
+        "category": "Resilience",
+        "status": "active",
+        "description": "Strips UTF-8 BOMs, converges 2-pass spid3r fmt, repairs vendor/studio, and exports reports to documents/.",
+    }
+    ,
+    {
+        "id": "desktop-aot-packager",
+        "name": "Desktop Native WebView Packager (Win / macOS / Linux)",
+        "module": "core/cli/BuildDesktop.matrix",
+        "category": "Target SDK",
+        "status": "active",
+        "description": "Compiles standalone native desktop binaries with embedded host.html and bundled runtime.",
+    }
+    ,
+    {
+        "id": "pwa-worker-engine",
+        "name": "Web Worker WASM & Offline PWA Service Worker",
+        "module": "core/cli/BuildWeb.matrix",
+        "category": "Target SDK",
+        "status": "active",
+        "description": "Packages off-main-thread wasmworker.js, sw.js offline cache, and mobile Home Screen manifest.json.",
+    }
+    ,
+    {
+        "id": "ios-xtool-bridge",
+        "name": "iOS SwiftPM + xtool 1.24.0 + Paced USB Installer",
+        "module": "core/cli/IosToolchain.matrix",
+        "category": "Target SDK",
+        "status": "active",
+        "description": "Builds Darwin arm64 SwiftPM apps, codesigns .ipa packages, and streams 16 KB USB chunks over usbmuxd.",
+    }
+    ,
+    {
+        "id": "android-gradle-bridge",
+        "name": "Android Kotlin WebViewAssetLoader & Gradle Packager",
+        "module": "core/cli/BuildAndroid.matrix",
+        "category": "Target SDK",
+        "status": "active",
+        "description": "Generates Kotlin Android projects with hardware back navigation and Gradle assembleDebug APK support.",
+    }
+    ,
+    ];
+}

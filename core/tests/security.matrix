@@ -1,0 +1,131 @@
+// tests/security.matrix
+// Security regression suite: XSS escaping, CSS injection defense, URL sanitization,
+// Host Effects validation, Bridge error boundaries, and CSP verification.
+
+import "studio/Util" as U;
+import "studio/Components" as ui;
+import "studio/Render" as render;
+import "studio/CSS" as css;
+import "studio/Theme" as theme;
+import "studio/Bridge" as br;
+import "studio/Http" as http;
+
+let passed = 0;
+let failed = 0;
+
+fn check_ok(cond: bool, name: string) {
+    if cond {
+        passed += 1;
+    } else {
+        failed += 1;
+        println("FAIL: " + name);
+    }
+}
+
+fn check_eq(a, b, name: string) {
+    check_ok(string(a) == string(b), name + " (" + string(a) + " != " + string(b) + ")");
+}
+
+fn main() -> int {
+    // 1. HTML & Attribute Escaping across components
+    let xss = "<script>alert(1)</script><img src=x onerror=alert(2)>\"'&";
+    let tree = ui.page([ui.navbar(xss), ui.text(xss), ui.chip(xss, "on_chip", true, {
+        "aria_label": xss
+    }), ui.checkbox(true, "on_chk", xss), ui.select([{
+        "value": "\" onclick=\"x()", "label": xss
+    }
+    ], "\" onclick=\"x()", "on_sel"), ui.dialog(xss, xss, [ui.button(xss, "on_btn")]), ui.toast(xss, "danger"),]);
+    let html = render.document(tree, [], 0);
+    check_ok(not html.contains("<script>"), "no raw script tag in rendered HTML");
+    check_ok(not html.contains("<img src=x"), "no raw img tag in rendered HTML");
+    check_ok(
+        not html.contains("value=\"\" onclick="),
+        "no attribute breakout on select option value"
+    );
+    check_ok(html.contains("&lt;script&gt;"), "angle brackets escaped in body");
+    check_ok(html.contains("&quot;"), "quotes escaped in attributes");
+
+    // 2. URL Sanitization (image, avatar, open_url, http_async)
+    for bad in [
+    "javascript:alert(1)",
+    "  JaVaScRiPt:alert(1)",
+    "vbscript:msgbox(1)",
+    "data:text/html,<script>alert(1)</script>",
+    "file:///etc/passwd",
+    ] {
+        check_eq(U.safe_url(bad), "", "safe_url blocks " + bad);
+        check_ok(not br.open_url(bad), "Bridge.open_url blocks " + bad);
+        br.set_host_caps({
+            "platform": "web"
+        });
+        check_ok(not http.get_async(bad, "cb"), "Http.get_async blocks " + bad);
+    }
+    check_ok(br.open_url("mailto:user@example.com"), "Bridge.open_url allows mailto");
+    check_ok(br.open_url("tel:+123456789"), "Bridge.open_url allows tel");
+    check_ok(
+        not render.node_html(ui.image("javascript:alert(1)")).contains("javascript:"),
+        "Render.image strips javascript src"
+    );
+    check_ok(
+        not render.node_html(ui.avatar("data:text/html,<b>x</b>", "A")).contains("data:text/html"),
+        "Render.avatar strips html data URL"
+    );
+
+    // 3. Icon and CSS Variable Sanitization
+    check_ok(
+        not U.esc_icon("<svg onload=alert(1)>").contains("<svg"),
+        "esc_icon blocks raw html injection"
+    );
+    check_ok(
+        not render.node_html(ui.iconbutton("<img src=x onerror=1>", "cb")).contains("<img"),
+        "iconbutton escapes arbitrary tag injection"
+    );
+
+    theme.reset();
+    theme.custom({
+        "primary": "red;} body{background:url(x)"
+    });
+    let sheet = css.stylesheet();
+    check_ok(
+        not sheet.contains("body{background"),
+        "CSS.stylesheet neutralizes CSS rule breakout"
+    );
+    theme.reset();
+
+    // 4. Bridge Error Boundaries
+    br.reset();
+    br.named_handler("explosive", (_ev) => {
+        let m = {
+        };
+        let _crash = m["missing_key"];
+    });
+    let err = br.dispatch_safe({
+        "sid": "explosive"
+    });
+    check_ok(err.contains("explosive"), "dispatch_safe contains exception with handler name");
+    check_eq(br.dispatch_safe("not json"), "", "dispatch_safe ignores invalid JSON safely");
+    br.reset();
+
+    // 5. CSP headers present in desktop & wasm hosts
+    let host_r = read_file("frameworks/targets/host.html");
+    check_ok(host_r.is_ok(), "frameworks/targets/host.html readable");
+    if host_r.is_ok() {
+        let h = string(host_r.unwrap());
+        check_ok(h.contains("Content-Security-Policy"), "host.html defines CSP");
+        check_ok(h.contains("object-src 'none'"), "host.html blocks object-src");
+    }
+    let wasm_r = read_file("frameworks/targets/wasmhost.template.html");
+    check_ok(wasm_r.is_ok(), "frameworks/targets/wasmhost.template.html readable");
+    if wasm_r.is_ok() {
+        let w = string(wasm_r.unwrap());
+        check_ok(w.contains("Content-Security-Policy"), "wasmhost defines CSP");
+        check_ok(w.contains("worker-src 'self'"), "wasmhost permits local worker");
+        check_ok(w.contains("object-src 'none'"), "wasmhost blocks object-src");
+    }
+
+    println("security passed: " + string(passed) + "  failed: " + string(failed));
+    if failed > 0 {
+        return 1;
+    }
+    return 0;
+}

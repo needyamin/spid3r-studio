@@ -1,0 +1,175 @@
+// gui/pages/Tests.matrix
+// Cross-platform verification view with KPI summary tiles and individual suite runners.
+
+import "studio/Components" as ui;
+import "studio/State" as state;
+import "gui/Jobs" as jobs;
+import "gui/Shell" as shell;
+
+fn run_full_tests(_ev) {
+    jobs.run_async("Run All Checks & Test Suites", () => {
+        let m = jobs.run_studio_cli(["test"]);
+        jobs.append_exec_logs(m);
+        let combined = string(m["stdout"]) + "\n" + string(m["stderr"]);
+        state.set("last_test_summary", jobs.parse_test_summary(combined));
+        return int(m["code"]) == 0;
+    });
+}
+
+fn run_suite(label: string, path: string) {
+    jobs.run_async("Test Suite: " + label, () => {
+        let m = if jobs.is_windows() {
+            jobs.run_exec(
+                "cmd",
+                ["/c",
+                "set SPID3R_PATH=.;frameworks;core;core/cli;%SPID3R_PATH%&& spid3r run " + path],
+                null
+            )
+        } else {
+            jobs.run_exec(
+                "env",
+                ["SPID3R_PATH=.:frameworks:core:core/cli",
+                "spid3r",
+                "run",
+                path],
+                null
+            )
+        };
+        jobs.append_exec_logs(m);
+        return int(m["code"]) == 0;
+    });
+}
+
+fn run_dry_run(_ev) {
+    let appdir = string(state.get_or("active_project", "workspace/demo"));
+    jobs.run_async("Headless GUI Dry-Run: " + appdir, () => {
+        let info = jobs.project_info(appdir);
+        let entry = jobs.join_dir(appdir, string(info["entry"]));
+        let m = if jobs.is_windows() {
+            jobs.run_exec(
+                "cmd",
+                ["/c",
+                "set SPID3R_PATH=.;frameworks;core;core/cli;%SPID3R_PATH%&& spid3r gui " + entry + " --html frameworks/targets/host.html --dry-run once"],
+                null
+            )
+        } else {
+            jobs.run_exec(
+                "env",
+                ["SPID3R_PATH=.:frameworks:core:core/cli",
+                "spid3r",
+                "gui",
+                entry,
+                "--html",
+                "frameworks/targets/host.html",
+                "--dry-run",
+                "once"],
+                null
+            )
+        };
+        jobs.append_exec_logs(m);
+        return int(m["code"]) == 0;
+    });
+}
+
+fn suite_row(name: string, desc: string, file: string, busy: bool) -> map {
+    return ui.row([ui.column([ui.text(name, "subtitle"), ui.caption(desc + "  (" + file + ")"),], {
+        "flex": 1
+    }), ui.button("Run Suite", (_ev) => run_suite(name, file), "secondary", {
+        "cls": "cc-sm", "disabled": busy
+    }),], {
+        "cls": "cc-rec-item"
+    });
+}
+
+fn kpi(label: string, val: string, sub: string) -> map {
+    return ui.column([ui.text(label, "cc-kpi-label"), ui.text(val, "cc-kpi-val"), ui.text(sub, "cc-kpi-sub"),], {
+        "cls": "cc-kpi"
+    });
+}
+
+public fn Tests() -> map {
+    let busy = state.get_or("job_busy", false) == true;
+    let active = string(state.get_or("active_project", "workspace/demo"));
+    let sum = state.get_or("last_test_summary", null);
+
+    let fmt_v = "Ready";
+    let chk_v = "--deny-warnings";
+    let sui_v = "5 Suites";
+    let ast_v = "309 Checks";
+    if sum != null and type_of(sum) == "map" {
+        fmt_v = if sum["fmt_ok"] == true {
+            "Clean"
+        } else {
+            "Pending"
+        };
+        chk_v = if sum["check_ok"] == true {
+            "0 Warnings"
+        } else {
+            "Pending"
+        };
+        sui_v = string(sum["suites"]) + " Passed";
+        ast_v = string(sum["passed"]) + " / " + string(
+            int(sum["passed"]) + int(sum["failed"])
+        );
+    }
+
+    let body = [
+    ui.row([kpi("Formatting", fmt_v, "spid3r fmt --check"), kpi(
+        "Static Analysis",
+        chk_v,
+        "Strict compiler check"
+    ), kpi("Test Suites", sui_v, "Framework, Security, FlatKit, WASM, GUI"), kpi("Assertions", ast_v, "Latest run result"),], {
+        "cls": "cc-kpis"
+    }),
+    ui.card([ui.row([ui.column([ui.title("Full Verification Pipeline (studio test)"), ui.caption(
+        "Verifies formatting, --deny-warnings across every .matrix file, and runs all 5 automated test suites."
+    ),], {
+        "flex": 1
+    }), ui.row([ui.button("Headless Dry-Run (" + active + ")", run_dry_run, "outline", {
+        "disabled": busy
+    }), ui.button("Run All Tests", run_full_tests, "primary", {
+        "disabled": busy
+    }),], {
+        "gap": 8
+    }),], {
+        "gap": 12, "wrap": true
+    }),]),
+    ui.card([ui.title("Individual Test Suites"), ui.caption(
+        "Run targeted test suites when iterating on a specific subsystem."
+    ), ui.spacer(6), ui.column([suite_row(
+        "Framework Core",
+        "UI components, Router, State, Storage, Theme, CSS, ARIA & effects",
+        "core/tests/framework.matrix",
+        busy
+    ), suite_row(
+        "Security & Escaping",
+        "HTML/CSS sanitization, safe_url allowlist & protocol framing",
+        "core/tests/security.matrix",
+        busy
+    ), suite_row(
+        "FlatKit Bundler",
+        "Lexer-aware module isolation & topological import bundling",
+        "core/tests/flatkit.matrix",
+        busy
+    ), suite_row(
+        "WASM Protocol & iOS CLI",
+        "Stateless REPL frames, DOM morph & xtool command checks",
+        "core/tests/wasm_protocol.matrix",
+        busy
+    ), suite_row(
+        "Control Center GUI",
+        "Readiness calculator, recommendations, Jobs & all 6 MVC GUI views",
+        "core/tests/gui_center.matrix",
+        busy
+    ),], {
+        "gap": 8
+    }),]),
+    ];
+
+    return shell.render_shell(
+        "Tests",
+        "Tests & Quality Assurance",
+        "Run formatter verification, strict compiler checks, and cross-platform suites.",
+        body
+    );
+}

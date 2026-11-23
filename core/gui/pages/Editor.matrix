@@ -1,0 +1,193 @@
+// gui/pages/Editor.matrix
+// MVC Code & Debugger View: browse & edit project .matrix / studio.json files,
+// save UTF-8 without BOM, run 2-pass spid3r fmt, compile with structured diagnostics,
+// inspect Spid3r v1.1.1 fix suggestions, and run 1-click Auto-Recovery.
+
+import "studio/Components" as ui;
+import "studio/State" as state;
+import "gui/Icons" as ico;
+import "gui/Shell" as shell;
+import "gui/models/StudioModel" as model;
+import "gui/controllers/StudioController" as ctrl;
+
+fn diagnostic_card(item: map) -> map {
+    let sev = string(item["severity"]);
+    let b_col = if sev == "error" {
+        "danger"
+    } else {
+        "accent"
+    };
+    let loc = string(item["file"]);
+    if int(item["line"]) > 0 {
+        loc += ":" + string(item["line"]) + ":" + string(item["col"]);
+    }
+    let fpath = string(item["file"]);
+    let row_actions = [];
+    if fpath != "" and file_exists(fpath) {
+        row_actions.push(ui.button("Open File", (_ev) => ctrl.select_editor_file(fpath), "secondary", {
+            "cls": "cc-sm"
+        }));
+    }
+    return ui.column([ui.row([ui.badge(sev.upper(), b_col), ui.badge(string(item["category"]), "primary"), ui.text(loc, "mono"), ui.flex_spacer(), ui.row(row_actions, {
+        "gap": 6
+    }),], {
+        "gap": 8
+    }), ui.text(string(item["message"]), "subtitle"), ui.text(
+        "Suggestion: " + string(item["suggestion"]),
+        "muted"
+    ),], {
+        "cls": "cc-doc-row"
+    });
+}
+
+public fn Editor() -> map {
+    let active = string(state.get_or("active_project", "workspace/demo"));
+    let busy = state.get_or("job_busy", false) == true;
+    model.ensure_editor_loaded(active);
+
+    let files = model.project_source_files(active);
+    let cur_file = string(state.get_or("editor_file", ""));
+    let content = string(state.get_or("editor_content", ""));
+    let dirty = state.get_or("editor_dirty", false) == true;
+    let lines_s = string(state.get_or("editor_lines", "0"));
+    let bytes_s = string(state.get_or("editor_bytes", "0"));
+
+    let file_chips = [];
+    for f in files {
+        let sf = string(f);
+        let short_lbl = sf;
+        if sf.starts_with(active + "/") {
+            short_lbl = sf.slice(active.len() + 1, sf.len());
+        }
+        file_chips.push(
+            ui.chip(short_lbl, (_ev) => ctrl.select_editor_file(sf), sf == cur_file)
+        );
+    }
+
+    let diag_rep = state.get_or("last_diagnostics", {
+        "status": "clean", "error_count": 0, "warning_count": 0, "items": []
+    });
+    if type_of(diag_rep) != "map" {
+        diag_rep = {
+            "status": "clean", "error_count": 0, "warning_count": 0, "items": []
+        };
+    }
+    let err_n = int(diag_rep["error_count"]);
+    let warn_n = int(diag_rep["warning_count"]);
+    let diag_items = diag_rep["items"];
+
+    let status_badge = ui.badge("0 Errors", "success");
+    if err_n > 0 {
+        status_badge = ui.badge(string(err_n) + " Error(s)", "danger");
+    } elif warn_n > 0 {
+        status_badge = ui.badge(string(warn_n) + " Warning(s)", "accent");
+    }
+
+    let dirty_badge = if dirty {
+        ui.badge("Unsaved Changes", "accent")
+    } else {
+        ui.badge("UTF-8 (No BOM)", "primary")
+    };
+
+    let editor_card = ui.card([ui.row([ui.row([ico.code()], {
+        "cls": "cc-icon-box indigo"
+    }), ui.column([ui.title("Source Editor & .matrix Inspector"), ui.caption(
+        "Select any .matrix or studio.json file in " + active + " to edit, format, and validate."
+    ),], {
+        "flex": 1
+    }), dirty_badge, status_badge,], {
+        "gap": 10
+    }), ui.spacer(4), ui.row(file_chips, {
+        "gap": 6, "wrap": true
+    }), ui.spacer(6), ui.row([ui.text(cur_file, "cc-code-text"), ui.caption(lines_s + " lines  |  " + bytes_s + " bytes"),], {
+        "cls": "cc-code-box"
+    }), ui.spacer(6), ui.textarea("Edit .matrix source...", (_ev) => {
+        state.set("editor_content", string(_ev["value"]));
+        state.set("editor_dirty", true);
+    }, content, {
+        "cls": "cc-editor-area", "rows": 14
+    }), ui.spacer(6), ui.row([ui.button("Save File", (_ev) => {
+        ctrl.save_current_editor_file();
+    }, "primary", {
+        "disabled": busy or cur_file == ""
+    }), ui.button("2-Pass Format (spid3r fmt)", (_ev) => ctrl.format_current_editor_file(), "secondary", {
+        "disabled": busy or cur_file == ""
+    }), ui.button("Compile & Check Project", (_ev) => ctrl.compile_and_diagnose_project(active), "secondary", {
+        "disabled": busy
+    }), ui.button("Auto-Recover Project", (_ev) => ctrl.trigger_auto_recovery(active), "outline", {
+        "disabled": busy
+    }), ui.flex_spacer(), ui.button("Reload from Disk", (_ev) => {
+        if cur_file != "" {
+            model.load_editor_file(cur_file);
+            state.set("toast_msg", "Reloaded " + cur_file);
+        }
+    }, "ghost", {
+        "cls": "cc-sm"
+    }),], {
+        "gap": 8, "wrap": true
+    }),]);
+
+    let diag_rows = [];
+    if type_of(diag_items) == "list" and diag_items.len() > 0 {
+        for item in diag_items {
+            diag_rows.push(diagnostic_card(item));
+        }
+    } else {
+        diag_rows.push(ui.row([ui.badge("CLEAN", "success"), ui.text(
+            "No compiler, formatter, or semantic issues detected in " + active + ".",
+            "subtitle"
+        ),], {
+            "cls": "cc-rec-item"
+        }));
+    }
+
+    let rec_state = state.get_or("last_recovery", null);
+    let rec_kids = [];
+    if rec_state != null and type_of(rec_state) == "map" and rec_state.has("actions") {
+        for act in rec_state["actions"] {
+            rec_kids.push(ui.caption("• " + string(act)));
+        }
+    } else {
+        rec_kids.push(
+            ui.caption(
+                "Auto-Recovery strips UTF-8 BOMs, runs 2-pass spid3r fmt convergence, syncs vendor/studio/, and clears stale lock flags."
+            )
+        );
+    }
+
+    let bottom_grid = ui.row([ui.card([ui.row([ui.title("Compiler Diagnostics & Smart Suggestions"), ui.flex_spacer(), ui.button("Run Check", (_ev) => ctrl.compile_and_diagnose_project(active), "primary", {
+        "cls": "cc-sm", "disabled": busy
+    }),]), ui.caption(
+        "Detects parser, semantic, formatter, and runtime errors and maps Spid3r v1.1.1 gotchas (BUG-01..BUG-08) to fixes."
+    ), ui.spacer(4), ui.column(diag_rows, {
+        "gap": 8
+    }),]), ui.card([ui.row([ui.row([ico.shield()], {
+        "cls": "cc-icon-box emerald"
+    }), ui.column([ui.title("Failure Recovery & Self-Healing"), ui.caption(
+        "1-click automated project repair and log export"
+    ),], {
+        "flex": 1
+    }),], {
+        "gap": 10
+    }), ui.divider(), ui.column(rec_kids, {
+        "gap": 4
+    }), ui.spacer(8), ui.row([ui.button("Run 1-Click Auto-Recovery", (_ev) => ctrl.trigger_auto_recovery(active), "primary", {
+        "disabled": busy
+    }), ui.button(
+        "Export Diagnostic Report",
+        (_ev) => ctrl.export_diagnostic_logs(),
+        "secondary"
+    ),], {
+        "gap": 8, "wrap": true
+    }),]),], {
+        "cls": "cc-2col"
+    });
+
+    return shell.render_shell(
+        "Editor",
+        "Code Editor, Diagnostics & Recovery",
+        "Edit .matrix files, run strict compiler checks, inspect Spid3r suggestions, and recover from build failures.",
+        [editor_card,
+        bottom_grid]
+    );
+}

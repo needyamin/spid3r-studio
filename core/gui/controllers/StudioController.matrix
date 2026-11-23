@@ -1,0 +1,317 @@
+// gui/controllers/StudioController.matrix
+// MVC Controller layer for Spid3r Studio Control Panel: coordinates user actions across
+// Workspace, Code Editor, Diagnostics, Recovery, 6-OS Builds, Downloads, and Log Export.
+
+import "studio/State" as state;
+import "studio/Storage" as storage;
+import "studio/Router" as nav;
+import "gui/Jobs" as jobs;
+import "gui/models/StudioModel" as model;
+import "core/Diagnostics" as diag;
+import "core/Recovery" as recovery;
+
+public fn switch_project(path: string) {
+    let clean = jobs.trim_slash(path);
+    if clean == "" {
+        return;
+    }
+    state.set("active_project", clean);
+    state.set("custom_project_input", clean);
+    storage.set("last_project", clean);
+    state.set("proj_info", jobs.project_info(clean));
+    state.set("vendor_status", model.check_vendor_update_status(clean));
+    model.ensure_editor_loaded(clean);
+    state.set("toast_msg", "Active project: " + clean);
+    model.push_notification("info", "Switched Workspace Project", clean);
+}
+
+public fn register_custom_project(path: string) {
+    let clean = jobs.trim_slash(path);
+    if clean == "" {
+        return;
+    }
+    let custom = storage.get_list("custom_projects");
+    let seen = false;
+    for item in custom {
+        if jobs.trim_slash(string(item)) == clean {
+            seen = true;
+        }
+    }
+    if not seen {
+        custom.push(clean);
+        storage.set("custom_projects", custom);
+    }
+    state.set("projects", jobs.discover_projects());
+    switch_project(clean);
+}
+
+public fn create_workspace_project(name: string, custom_outdir: string) {
+    let clean_name = name.trim();
+    if clean_name == "" {
+        state.set("toast_msg", "Enter an App Name first");
+        return;
+    }
+    let outdir = custom_outdir.trim();
+    if outdir == "" {
+        outdir = "workspace/" + clean_name;
+    }
+    jobs.run_async("Create App in Workspace: " + clean_name, () => {
+        model.init_architecture_dirs();
+        let m = jobs.run_studio_cli(["new", clean_name, outdir]);
+        jobs.append_exec_logs(m);
+        if int(m["code"]) == 0 {
+            register_custom_project(outdir);
+            state.set("new_app_name", "");
+            state.set("new_app_dir", "");
+            model.push_notification("success", "Created Project " + clean_name, "Path: " + outdir);
+            return true;
+        }
+        model.push_notification(
+            "error",
+            "Project Creation Failed",
+            "Could not scaffold " + clean_name
+        );
+        return false;
+    });
+}
+
+public fn select_editor_file(file_path: string) {
+    if model.load_editor_file(file_path) {
+        state.set("toast_msg", "Loaded " + file_path);
+    } else {
+        state.set("toast_msg", "Could not read " + file_path);
+    }
+}
+
+public fn save_current_editor_file() -> bool {
+    let path = string(state.get_or("editor_file", "")).trim();
+    if path == "" {
+        state.set("toast_msg", "No file selected in editor");
+        return false;
+    }
+    let raw = string(state.get_or("editor_content", ""));
+    let clean = recovery.strip_utf8_bom_text(raw).replace("\r\n", "\n");
+    let wr = write_file(path, clean);
+    if wr.is_err() {
+        let err_s = string(wr.unwrap_err());
+        state.set("toast_msg", "Save failed: " + err_s);
+        model.push_notification("error", "Save Failed: " + path, err_s);
+        return false;
+    }
+    state.set("editor_content", clean);
+    state.set("editor_dirty", false);
+    state.set("editor_lines", string(clean.split("\n").len()));
+    state.set("editor_bytes", string(clean.len()));
+    let active = string(state.get_or("active_project", "workspace/demo"));
+    state.set("proj_info", jobs.project_info(active));
+    state.set("toast_msg", "Saved " + path + " (UTF-8 no BOM)");
+    model.push_notification("success", "Saved File", path);
+    return true;
+}
+
+public fn format_current_editor_file() {
+    let path = string(state.get_or("editor_file", "")).trim();
+    if path == "" {
+        state.set("toast_msg", "No file selected to format");
+        return;
+    }
+    if state.get_or("editor_dirty", false) == true {
+        if not save_current_editor_file() {
+            return;
+        }
+    }
+    if not path.ends_with(".matrix") {
+        recovery.sanitize_file_no_bom(path);
+        model.load_editor_file(path);
+        state.set("toast_msg", "Sanitized UTF-8 BOM on " + path);
+        return;
+    }
+    jobs.run_async("2-Pass Format: " + path, () => {
+        let ok = recovery.format_two_pass([path]);
+        model.load_editor_file(path);
+        if ok {
+            model.push_notification("success", "Formatted .matrix File", path);
+        } else {
+            model.push_notification("warning", "Format Needs Syntax Fix", path);
+        }
+        return ok;
+    });
+}
+
+public fn compile_and_diagnose_project(appdir: string = "") {
+    let tgt = if appdir.trim() != "" {
+        appdir.trim()
+    } else {
+        string(state.get_or("active_project", "workspace/demo"))
+    };
+    if state.get_or("editor_dirty", false) == true {
+        save_current_editor_file();
+    }
+    jobs.run_async("Compile & Diagnose: " + tgt, () => {
+        let files = model.project_source_files(tgt);
+        let combined_out = "";
+        let all_ok = true;
+        for f in files {
+            let sf = string(f);
+            if not sf.ends_with(".matrix") {
+                continue;
+            }
+            let m = if jobs.is_windows() {
+                jobs.run_exec(
+                    "cmd",
+                    ["/c",
+                    "set SPID3R_PATH=.;frameworks;core;core/cli;" + tgt + ";%SPID3R_PATH%&& spid3r check --deny-warnings " + sf],
+                    null
+                )
+            } else {
+                jobs.run_exec(
+                    "env",
+                    ["SPID3R_PATH=.:frameworks:core:core/cli:" + tgt,
+                    "spid3r",
+                    "check",
+                    "--deny-warnings",
+                    sf],
+                    null
+                )
+            };
+            jobs.append_exec_logs(m);
+            let out = string(m["stdout"]) + "\n" + string(m["stderr"]);
+            combined_out += out + "\n";
+            if int(m["code"]) != 0 {
+                all_ok = false;
+            }
+        }
+        let report = diag.analyze_output(combined_out, tgt);
+        state.set("last_diagnostics", report);
+        let errs = int(report["error_count"]);
+        let warns = int(report["warning_count"]);
+        if all_ok and errs == 0 {
+            model.push_notification(
+                "success",
+                "Compilation Check Passed",
+                tgt + " verified with 0 errors and " + string(warns) + " warnings."
+            );
+            return true;
+        }
+        model.push_notification(
+            "error",
+            "Diagnostics Detected Issues",
+            string(errs) + " error(s), " + string(warns) + " warning(s) in " + tgt
+        );
+        return false;
+    });
+}
+
+public fn trigger_auto_recovery(appdir: string = "") {
+    let tgt = if appdir.trim() != "" {
+        appdir.trim()
+    } else {
+        string(state.get_or("active_project", "examples/demo"))
+    };
+    jobs.run_async("Auto-Recover Project: " + tgt, () => {
+        if state.get_or("web_running", false) == true {
+            jobs.stop_web_server();
+        }
+        let res = recovery.recover_project(tgt, ".");
+        for act in res["actions"] {
+            jobs.append_log("[recovery] " + string(act));
+        }
+        state.set("last_recovery", res);
+        state.set("proj_info", jobs.project_info(tgt));
+        state.set("vendor_status", model.check_vendor_update_status(tgt));
+        let cur_f = string(state.get_or("editor_file", ""));
+        if cur_f != "" and file_exists(cur_f) {
+            model.load_editor_file(cur_f);
+        }
+        let ok = res["ok"] == true;
+        if ok {
+            model.push_notification(
+                "success",
+                "Auto-Recovery Completed",
+                "Repaired & formatted " + string(res["files_fixed"]) + " file(s) in " + tgt
+            );
+        } else {
+            model.push_notification(
+                "warning",
+                "Partial Recovery",
+                "Some syntax errors remain in " + tgt + " — see Diagnostics"
+            );
+        }
+        return ok;
+    });
+}
+
+public fn export_diagnostic_logs() {
+    let active = string(state.get_or("active_project", "workspace/demo"));
+    let logs = jobs.logs_text();
+    let d = state.get_or("last_diagnostics", {
+        "status": "clean", "error_count": 0, "warning_count": 0, "items": []
+    });
+    if type_of(d) != "map" {
+        d = {
+            "status": "clean", "error_count": 0, "warning_count": 0, "items": []
+        };
+    }
+    let res = recovery.export_logs_and_report(".", active, logs, d);
+    if res["ok"] == true {
+        state.set("last_exported_log", string(res["log_path"]));
+        state.set("last_exported_report", string(res["report_path"]));
+        state.set("toast_msg", "Exported logs to " + string(res["log_path"]));
+        model.push_notification(
+            "success",
+            "Exported Logs & QA Report",
+            string(res["log_path"]) + " & " + string(res["report_path"])
+        );
+    } else {
+        state.set("toast_msg", "Failed to export logs to documents/logs/");
+    }
+}
+
+public fn build_platform_target(appdir: string, target: string, label: string) {
+    jobs.run_async("Build " + label + ": " + appdir, () => {
+        let m = jobs.run_studio_cli(["build", appdir, "--target", target]);
+        jobs.append_exec_logs(m);
+        state.set("proj_info", jobs.project_info(appdir));
+        let ok = int(m["code"]) == 0;
+        if ok {
+            model.push_notification("success", "Built " + label, appdir + "/build/" + target);
+        } else {
+            let rep = diag.analyze_output(
+                string(m["stdout"]) + "\n" + string(m["stderr"]),
+                appdir
+            );
+            state.set("last_diagnostics", rep);
+            model.push_notification(
+                "error",
+                "Build Failed: " + label,
+                "Inspect Diagnostics or run Auto-Recover"
+            );
+        }
+        return ok;
+    });
+}
+
+public fn cache_wasm_runtime_to_downloads() {
+    let active = string(state.get_or("active_project", "workspace/demo"));
+    jobs.run_async("Extract & Cache Spid3r WASM Runtime", () => {
+        let m = jobs.run_studio_cli(["build", active, "--target", "web"]);
+        jobs.append_exec_logs(m);
+        state.set("proj_info", jobs.project_info(active));
+        let ok = int(m["code"]) == 0;
+        if ok {
+            model.push_notification(
+                "success",
+                "Cached WASM Runtime",
+                "downloads/wasm-runtime/ populated with spid3r.wasm & spid3r.js"
+            );
+        }
+        return ok;
+    });
+}
+
+public fn open_code_editor_for(file_path: string) {
+    if file_path != "" and file_exists(file_path) {
+        model.load_editor_file(file_path);
+    }
+    nav.replace("Editor");
+}

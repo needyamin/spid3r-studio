@@ -1,4 +1,4 @@
-# Build & package outputs
+# Build & compiled target outputs
 **/build/
 dist/
 target/
@@ -8,24 +8,34 @@ target/
 *.apk
 *.aab
 *.tmp
+._tmp_*
 
-# AppStudio cache & transient dev/test artifacts
-.studio-cache/
-.studio-*
-_test_*/
-storage/
+# Downloads, SDK installers & cached toolchains (keep downloads/packages/catalog.json tracked)
+downloads/xtool/
+downloads/wasm-runtime/
+downloads/installers/
 *.xip
 *.AppImage
 .xtool/
+
+# Generated logs & diagnostic reports
+documents/logs/*.log
+documents/reports/*.json
+
+# Runtime storage & transient dev/test artifacts
+**/storage/
+.studio-*
+_test_*/
+
+# Python, IDE & OS files
 __pycache__/
 *.py[cod]
-
-# Workspace & OS files
 .mimosa/
+.vscode/
+.idea/
 .DS_Store
 Thumbs.db
 
-# Agent documentation (generated)
+# Local agent memory & local-only Spid3r bug tracker (never push to GitHub)
 AGENTS.md
-PLAN.md
-plan.html
+bugs.html
