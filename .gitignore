@@ -4,13 +4,21 @@ dist/
 target/
 *.exe
 *.matrixc
+*.ipa
+*.apk
+*.aab
 *.tmp
 
 # AppStudio cache & transient dev/test artifacts
 .studio-cache/
 .studio-*
-_test_storage*/
+_test_*/
 storage/
+*.xip
+*.AppImage
+.xtool/
+__pycache__/
+*.py[cod]
 
 # Workspace & OS files
 .mimosa/
@@ -18,6 +26,6 @@ storage/
 Thumbs.db
 
 # Agent documentation (generated)
-AGENTS.md   
+AGENTS.md
 PLAN.md
 plan.html

@@ -10,12 +10,16 @@ public fn usage() {
     println(
         "  new <AppName> [outdir]            Scaffold a self-contained app (vendors the framework)"
     );
+    println("  gui [appdir]                      Launch AppStudio GUI Control Center window");
     println("  run <appdir>                      Run the app in a webview window");
     println(
-        "  dev <appdir> [--target web]       Hot-reload preview (--target web [--host IP] [--port N])"
+        "  dev <appdir> [--target T]       Hot-reload preview (--target web [--host IP] [--port N] | ios)"
     );
     println("  check <appdir>                    Static-check the app entry");
     println("  build <appdir> [--target T]       T = web (default) | android | ios | desktop");
+    println(
+        "  ios <subcommand>                  Manage xtool & deploy iOS (install-tools|status|setup|devices|run)"
+    );
     println(
         "  test [filter]                     Run fmt --check, strict checks, and test suites"
     );

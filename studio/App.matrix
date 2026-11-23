@@ -40,6 +40,9 @@ fn build_error_html(heading: string, detail: string) -> string {
 // Mounted-instance registry so plain handler functions can reach the running app:
 //   App.current().restyle();
 let current_app = null;
+let dirty_render = false;
+let bg_busy = false;
+let rendering = false;
 
 public fn mount(a) {
     current_app = a;
@@ -49,6 +52,16 @@ public fn current() -> App {
     return current_app;
 }
 
+/// Request a UI re-render on the next native event-loop tick (safe from spawn workers).
+public fn request_render() {
+    dirty_render = true;
+}
+
+/// Mark whether background spawn workers are active so native GUI polls for dirty renders.
+public fn set_bg_busy(active: bool) {
+    bg_busy = active;
+}
+
 /// Re-inject CSS + re-render from anywhere (wasm-safe, alias-friendly):
 ///   appkit.refresh_theme();
 public fn refresh_theme() {
@@ -56,23 +69,6 @@ public fn refresh_theme() {
     if a != null {
         a.restyle();
     }
-}
-
-fn is_dry_run_mode() -> bool {
-    let d = env("STUDIO_DRY_RUN");
-    if string(d) != "none" {
-        let sv = string(d.unwrap()).trim().lower();
-        if sv == "1" or sv == "true" {
-            return true;
-        }
-    }
-    for a in args() {
-        let sa = string(a);
-        if sa == "--dry-run" or sa == "dry-run" or sa == "--once" or sa == "once" {
-            return true;
-        }
-    }
-    return false;
 }
 
 public class App {
@@ -85,6 +81,7 @@ public class App {
     private let root_page;
     private let data_dir_path;
     private let boot_fn;
+    private let ready_fn;
     private let in_wasm;
     private let rendered_in_dispatch;
     private let client_ready;
@@ -101,6 +98,7 @@ public class App {
         self.root_page = "";
         self.data_dir_path = "storage";
         self.boot_fn = null;
+        self.ready_fn = null;
         self.in_wasm = false;
         self.rendered_in_dispatch = false;
         self.client_ready = false;
@@ -138,6 +136,12 @@ public class App {
     /// Boot function: called before the first render (seed storage, load data).
     public fn boot(self, f) -> App {
         self.boot_fn = f;
+        return self;
+    }
+
+    /// Ready callback: invoked once when the native webview reports ready (after main returns).
+    public fn on_ready(self, f) -> App {
+        self.ready_fn = f;
         return self;
     }
 
@@ -224,20 +228,47 @@ public class App {
         }
     }
 
+    private fn sync_native_poll(self) {
+        if self.in_wasm or not self.client_ready {
+            return;
+        }
+        let active_js = if dirty_render or bg_busy {
+            "true"
+        } else {
+            "false"
+        };
+        br.eval(
+            "(function(){if(window.__studio&&window.__studio.setPoll){window.__studio.setPoll("
+            + active_js + ",140);}})();"
+        );
+    }
+
     /// Render the current route into the webview (native mode).
     public fn render(self) {
-        br.clear_slots();
-        let html = self.page_html();
-        if not self.in_wasm and self.client_ready {
-            br.eval(
-                r#"(function(h){if(window.__studio&&window.__studio.patch){window.__studio.patch(h);}else{var r=document.getElementById('spid3r-root')||document.body;if(r){r.innerHTML=h;}}})("#
-                + json_write(html) + ");"
-            );
-        } else {
-            br.set_html(html);
+        if rendering {
+            return;
         }
-        self.flush_native_effects();
-        self.rendered_in_dispatch = true;
+        rendering = true;
+        dirty_render = false;
+        try {
+            br.clear_slots();
+            let html = self.page_html();
+            if not self.in_wasm and self.client_ready {
+                br.eval(
+                    r#"(function(h){if(window.__studio&&window.__studio.patch){window.__studio.patch(h);}else{var r=document.getElementById('spid3r-root')||document.body;if(r){r.innerHTML=h;}}})("#
+                    + json_write(html) + ");"
+                );
+            } else {
+                br.set_html(html);
+            }
+            self.flush_native_effects();
+            self.sync_native_poll();
+            self.rendered_in_dispatch = true;
+        } catch (e) {
+            rendering = false;
+            throw e;
+        }
+        rendering = false;
     }
 
     /// Re-inject the stylesheet (after Theme changes) and re-render.
@@ -270,7 +301,28 @@ public class App {
         }
         self.render();
 
-        br.on("ui", (ev) => {
+        br.on("ui", (a, b = null) => {
+            let ev = if b != null {
+                b
+            } else {
+                a
+            };
+            let p = br.normalize(ev);
+            if p != null and p.has("sid") and string(p["sid"]) == "__studio_tick__" {
+                if dirty_render {
+                    try {
+                        self.render();
+                    } catch (e) {
+                        br.set_html(build_error_html("Render error", string(e)));
+                    }
+                } else {
+                    self.sync_native_poll();
+                }
+                if file_exists(".studio-stop") or file_exists(".studio-reload") {
+                    request_shutdown();
+                }
+                return;
+            }
             self.rendered_in_dispatch = false;
             let err = br.dispatch_safe(ev);
             if err != "" {
@@ -283,24 +335,35 @@ public class App {
                 } catch (e) {
                     br.set_html(build_error_html("Render error", string(e)));
                 }
+            } else {
+                self.sync_native_poll();
             }
         });
 
-        if is_dry_run_mode() {
-            return 0;
-        }
-
-        // Hold the process open so the webview keeps talking to us.
-        // Escape hatches: window close (shutdown_requested), a .studio-stop
-        // flag (tooling/CI), or .studio-reload (studio dev hot reload).
-        while not shutdown_requested() {
-            sleep_ms(150);
-            if file_exists(".studio-stop") or file_exists(".studio-reload") {
-                // ask the gui runner to terminate this app cleanly
-                request_shutdown();
-                break;
+        br.on("ready", (_a, _b = null) => {
+            if self.ready_fn != null {
+                try {
+                    let rf = self.ready_fn;
+                    rf();
+                } catch (e) {
+                    br.set_html(build_error_html("Ready error", string(e)));
+                    return;
+                }
             }
-        }
+            if dirty_render {
+                try {
+                    self.render();
+                } catch (e2) {
+                    br.set_html(build_error_html("Render error", string(e2)));
+                }
+            } else {
+                self.sync_native_poll();
+            }
+        });
+
+        // Return immediately with zero active background tasks so `spid3r gui` enters its
+        // native WebView2/tao event loop with no drain delay; dirty_render refreshes are
+        // driven on demand by `window.__studio.setPoll(...)` via `__studio_tick__`.
         return 0;
     }
 

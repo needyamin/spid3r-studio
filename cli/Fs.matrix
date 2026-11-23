@@ -296,7 +296,7 @@ public fn setup_import_path() {
         }
     }
     if not found {
-        env_set("SPID3R_PATH", existing + sep + root);
+        env_set("SPID3R_PATH", root + sep + existing);
     }
 }
 

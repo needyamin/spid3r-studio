@@ -1,0 +1,10 @@
+{
+  "name": "AppStudio Control Center",
+  "bundleID": "sh.appstudio.controlcenter",
+  "version": "1.0.0",
+  "entry": "main.matrix",
+  "theme": {
+    "mode": "light",
+    "primary": "#4f46e5"
+  }
+}

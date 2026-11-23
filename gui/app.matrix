@@ -1,0 +1,133 @@
+// gui/app.matrix
+// Root AppStudio GUI Control Center application with desktop sidebar shell,
+// dark/light theme persistence, and async toolchain scan.
+
+import "studio/App" as appkit;
+import "studio/State" as state;
+import "studio/Storage" as storage;
+import "studio/Theme" as theme;
+import "studio/Bridge" as br;
+import "gui/Jobs" as jobs;
+import "gui/Toolchain" as tc;
+import "gui/pages/Workspace" as p_ws;
+import "gui/pages/Platforms" as p_plat;
+import "gui/pages/Tests" as p_tests;
+import "gui/pages/Doctor" as p_doc;
+
+fn is_headless_dry_run() -> bool {
+    let d = env("STUDIO_DRY_RUN");
+    if string(d) != "none" {
+        let sv = string(d.unwrap()).trim().lower();
+        if sv == "1" or sv == "true" {
+            return true;
+        }
+    }
+    for a in args() {
+        let sa = string(a);
+        if sa == "--dry-run" or sa == "dry-run" or sa == "--once" or sa == "once" {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn pick_initial_project() -> string {
+    let cli = args();
+    for a in cli {
+        let s = string(a).trim();
+        if s == "" or s.starts_with("-") or s == "once" or s == "dry-run" {
+            continue;
+        }
+        if is_dir(s) {
+            return jobs.trim_slash(s);
+        }
+    }
+    let last = string(storage.get("last_project", "")).trim();
+    if last != "" and is_dir(last) {
+        return last;
+    }
+    if is_dir("examples/demo") {
+        return "examples/demo";
+    }
+    return ".";
+}
+
+fn boot_control_center() {
+    let saved_theme = string(storage.get("cc_theme", "dark"));
+    if saved_theme == "light" {
+        theme.mode("light");
+    } else {
+        theme.mode("dark");
+    }
+    let proj = pick_initial_project();
+    state.set("active_project", proj);
+    state.set("custom_project_input", proj);
+    state.set("web_host", "0.0.0.0");
+    state.set("web_port", "8080");
+    state.set("show_console", false);
+    state.set("projects", jobs.discover_projects());
+    state.set("proj_info", jobs.project_info(proj));
+}
+
+fn ready_control_center() {
+    if not is_headless_dry_run() and br.platform() != "web" {
+        tc.trigger_rescan(true);
+    }
+}
+
+fn flip_theme(_ev) {
+    let next = if string(theme.tokens()["mode"]) == "dark" {
+        "light"
+    } else {
+        "dark"
+    };
+    theme.mode(next);
+    storage.set("cc_theme", next);
+    appkit.refresh_theme();
+}
+
+fn dismiss_toast(_ev) {
+    state.drop("toast_msg");
+}
+
+fn wrap_with_toast(p: map) -> map {
+    let msg = string(state.get_or("toast_msg", ""));
+    if msg != "" and p.has("children") and type_of(p["children"]) == "list" {
+        let shell_node = p["children"][0];
+        if type_of(shell_node) == "map" and shell_node.has("children") and type_of(shell_node["children"]) == "list" {
+            shell_node["children"].push({
+                "el": "toast", "text": msg, "variant": "info", "onDismiss": "dismiss_toast", "children": []
+            });
+        }
+    }
+    return p;
+}
+
+fn page_ws() -> map {
+    return wrap_with_toast(p_ws.Workspace());
+}
+
+fn page_plat() -> map {
+    return wrap_with_toast(p_plat.Platforms());
+}
+
+fn page_tests() -> map {
+    return wrap_with_toast(p_tests.Tests());
+}
+
+fn page_doc() -> map {
+    return wrap_with_toast(p_doc.Doctor());
+}
+
+public fn studio_app() {
+    return appkit.App("AppStudio Control Center", "sh.appstudio.controlcenter", "1.0.0")
+    .data_dir("gui/storage")
+    .page("Workspace", page_ws)
+    .page("Platforms", page_plat)
+    .page("Tests", page_tests)
+    .page("Doctor", page_doc)
+    .handler("flip_theme", flip_theme)
+    .handler("dismiss_toast", dismiss_toast)
+    .boot(boot_control_center)
+    .on_ready(ready_control_center);
+}

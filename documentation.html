@@ -329,7 +329,7 @@
       <li><a href="#details">7. Key Technical Details</a></li>
     </ul>
     <div class="sidebar-meta">
-      <div>Roadmap: <strong>31 / 35 tasks done</strong></div>
+      <div>Roadmap: <strong>32 / 35 tasks done</strong></div>
       <div style="margin-top:6px;">
         <a href="plan.html">Open plan.html</a> · <a href="AGENTS.md">Open AGENTS.md</a>
       </div>
@@ -448,6 +448,10 @@
             <td>Audits installed tools: <code>spid3r</code>, <code>xtool</code>, <code>swift</code>, <code>java</code>, <code>gradle</code>, <code>adb</code>, and <code>ANDROID_HOME</code> / <code>ANDROID_SDK_ROOT</code>.</td>
           </tr>
           <tr>
+            <td><code>spid3r run studio.matrix gui [appdir]</code></td>
+            <td>Launches the full <strong>AppStudio GUI Control Center</strong> (or double-click <code>AppStudio.bat</code>) for visual project switching, cross-platform builds/previews, iOS <code>.ipa</code> USB installs, test runs, and missing-tool downloads.</td>
+          </tr>
+          <tr>
             <td><code>spid3r run studio.matrix new &lt;AppName&gt; [outdir]</code></td>
             <td>Creates a self-contained project from <code>templates/starter/</code> and vendors <code>studio/*</code> into <code>vendor/studio/</code> alongside <code>targets/host.html</code> and <code>studio.json</code>.</td>
           </tr>
@@ -456,8 +460,8 @@
             <td>Launches the native desktop preview window (`spid3r gui &lt;entry&gt; --html &lt;host&gt;`). Close the window to exit.</td>
           </tr>
           <tr>
-            <td><code>spid3r run studio.matrix dev &lt;appdir&gt; [--target web] [--port N]</code></td>
-            <td>Launches native hot-reload preview, or serves <code>build/web/</code> over HTTP with auto-rebuild when <code>--target web</code> is passed.</td>
+            <td><code>spid3r run studio.matrix dev &lt;appdir&gt; [--target web|ios] [--host IP] [--port N]</code></td>
+            <td>Launches native hot-reload preview, serves <code>build/web/</code> over concurrent HTTP with auto-rebuild (use <code>--host 0.0.0.0</code> for LAN/phone Safari preview), or deploys to iPhone when <code>--target ios</code> is passed.</td>
           </tr>
           <tr>
             <td><code>spid3r run studio.matrix check &lt;appdir&gt;</code></td>
@@ -466,6 +470,10 @@
           <tr>
             <td><code>spid3r run studio.matrix build &lt;appdir&gt; [--target T] [-o &lt;outdir&gt;]</code></td>
             <td>Packages the app (including <code>assets/</code> &amp; <code>studio.json</code> icon/theme/SDK settings) for <code>web</code> (default), <code>android</code>, <code>ios</code>, or <code>desktop</code>.</td>
+          </tr>
+          <tr>
+            <td><code>spid3r run studio.matrix ios &lt;install-tools|status|setup|devices|run|install|uninstall|launch&gt;</code></td>
+            <td>Manages AppStudio's cached <code>xtool 1.24.0</code> iOS toolchain (WSL2/Linux/macOS), checks device prerequisites, and deploys/launches directly on iPhone.</td>
           </tr>
           <tr>
             <td><code>spid3r run studio.matrix test [filter]</code></td>
@@ -487,16 +495,24 @@
       </table>
 
       <h3>Target Build Examples</h3>
-<pre><button type="button" class="copy-btn">Copy</button><code># Check environment
+<pre><button type="button" class="copy-btn">Copy</button><code># Launch Complete GUI Mode (Control Center)
+spid3r run studio.matrix gui
+
+# Check environment
 spid3r run studio.matrix doctor
 
 # Create a new project
 spid3r run studio.matrix new MyApp
 
-# Run &amp; hot-reload during development (native or browser)
+# Run &amp; hot-reload during development (native, desktop browser, or phone on LAN)
 spid3r run studio.matrix run examples/demo
 spid3r run studio.matrix dev examples/demo
-spid3r run studio.matrix dev examples/demo --target web --port 8080
+spid3r run studio.matrix dev examples/demo --target web --host 0.0.0.0 --port 8080
+
+# Managed iOS toolchain &amp; USB deployment (WSL2 / Linux / macOS)
+spid3r run studio.matrix ios install-tools
+spid3r run studio.matrix ios status
+spid3r run studio.matrix ios run examples/demo
 
 # Package for each platform (optional -o sets custom output directory)
 spid3r run studio.matrix build examples/demo --target web
@@ -507,14 +523,14 @@ spid3r run studio.matrix build examples/demo --target ios
 # Verify formatting, compiler warnings, and all 4 test suites
 spid3r run studio.matrix test</code></pre>
       <div class="callout">
-        <strong>After building:</strong> Serve <code>build/web/</code> over HTTP (for example <code>python -m http.server</code>) to test in a browser; open <code>build/android/AndroidApp/</code> in Android Studio or run <code>gradle assembleDebug</code>; run <code>xtool dev</code> inside <code>build/ios/&lt;SwiftName&gt;/</code> to deploy to iPhone; or launch the compiled binary directly in <code>build/desktop/</code>.
+        <strong>After building:</strong> Web builds emit a PWA (<code>manifest.json</code> + <code>sw.js</code> offline cache + iOS Home Screen meta tags), so phones on the same Wi-Fi can open <code>http://&lt;PC-IP&gt;:8080/index.html</code> and tap <strong>Share → Add to Home Screen</strong>. For native targets, run <code>spid3r run studio.matrix ios run &lt;appdir&gt;</code> (managed <code>xtool 1.24.0</code>) for iPhone, open <code>build/android/AndroidApp/</code> in Android Studio (or run <code>gradle assembleDebug</code>) for Android, or launch the binary in <code>build/desktop/</code>.
       </div>
     </section>
 
     <section class="card" id="dev-commands">
       <h2>4. Framework Developer &amp; Verification Operations</h2>
       <p>Use these commands when working inside the AppStudio framework itself (PowerShell examples):</p>
-<pre><button type="button" class="copy-btn">Copy</button><code># Run all formatting, compiler checks, and 4 test suites in one command
+<pre><button type="button" class="copy-btn">Copy</button><code># Verify formatting, --deny-warnings across all .matrix files, and all 5 test suites
 Remove-Item Env:SPID3R_PATH -ErrorAction SilentlyContinue
 spid3r run studio.matrix test
 
@@ -524,8 +540,10 @@ spid3r run tests/framework.matrix
 spid3r run tests/security.matrix
 spid3r run tests/flatkit.matrix
 spid3r run tests/wasm_protocol.matrix
+spid3r run tests/gui_center.matrix
 
-# Native GUI headless smoke test (prints boot eval calls and exits immediately)
+# Native GUI headless smoke tests (Control Center + showcase)
+spid3r gui gui/main.matrix --html targets/host.html --dry-run once
 spid3r gui examples/demo/main.matrix --html targets/host.html --dry-run once</code></pre>
     </section>
 
@@ -583,11 +601,15 @@ fn main() -&gt; int {
 ├── main.matrix         # Entry file + 5 native GUI shims
 ├── studio.json         # App name, bundleID, version, entry
 ├── spider.toml         # Module import paths (vendor/studio)
+├── assets/             # Static icons &amp; images copied to all targets
 ├── pages/              # Optional submodules (bundled by FlatKit)
 ├── storage/            # Local persistent kv.json storage (desktop)
 ├── targets/host.html   # WebView HTML host shell
 └── vendor/studio/      # Vendored framework runtime modules</code></pre>
         </div>
+      </div>
+      <div class="callout">
+        <strong>Verified Showcase (<code>examples/demo/</code>):</strong> Multi-file app combining <code>app.matrix</code>, <code>main.matrix</code>, <code>studio.json</code>, <code>assets/logo.svg</code>, and modular screens in <code>pages/Home.matrix</code>, <code>pages/Detail.matrix</code>, and <code>pages/Stats.matrix</code>. Run natively with <code>spid3r run studio.matrix run examples/demo</code> or preview on desktop and mobile Safari via <code>spid3r run studio.matrix dev examples/demo --target web --host 0.0.0.0 --port 8080</code>.
       </div>
     </section>
 
@@ -654,8 +676,8 @@ fn main() -&gt; int {
           <p>Before running boot or event handlers, the host runtime populates <code>platform</code> (<code>"native"</code>, <code>"web"</code>, <code>"android"</code>, or <code>"ios"</code>), <code>prefers_dark</code>, and <code>viewport_width</code>, enabling adaptive layouts and platform-aware logic inside one codebase.</p>
         </div>
         <div class="mini-card">
-          <h4>WASM Runtime Caching (<code>.studio-cache/</code>)</h4>
-          <p>The first Web, Android, or iOS build extracts <code>spid3r.js</code> and <code>spid3r.wasm</code> once into a versioned <code>.studio-cache/&lt;version&gt;/</code> directory (gitignored) and reuses it across subsequent builds.</p>
+          <h4>Runtime, Toolchain &amp; PWA Caching</h4>
+          <p><code>.studio-cache/</code> (gitignored) caches both the versioned WASM runtime (<code>spid3r.js</code> + <code>spid3r.wasm</code>) and the managed <code>xtool 1.24.0</code> iOS toolchain (<code>studio ios install-tools</code>). Built Web apps also ship <code>manifest.json</code> and <code>sw.js</code> for offline PWA caching and iOS Home Screen installation.</p>
         </div>
       </div>
     </section>

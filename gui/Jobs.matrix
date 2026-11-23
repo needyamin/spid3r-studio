@@ -1,0 +1,709 @@
+// gui/Jobs.matrix
+// Background job runner, process/service manager, CLI wrappers, and project scanner.
+
+import "studio/App" as appkit;
+import "studio/State" as state;
+import "studio/Storage" as storage;
+
+public fn is_windows() -> bool {
+    let wd = env("WINDIR");
+    if string(wd) != "none" {
+        return true;
+    }
+    let os_v = env("OS");
+    if string(os_v) != "none" and string(os_v.unwrap()).lower().contains("windows") {
+        return true;
+    }
+    return false;
+}
+
+public fn trim_slash(p: string) -> string {
+    let t = string(p).replace("\\", "/");
+    while t.len() > 1 and t.ends_with("/") {
+        t = t.slice(0, t.len() - 1);
+    }
+    return t;
+}
+
+public fn str_find_from(s: string, needle: string, from: int) -> int {
+    let n = s.len();
+    let nl = needle.len();
+    if nl == 0 or nl > n {
+        return -1;
+    }
+    let i = from;
+    while i <= n - nl {
+        if s.slice(i, i + nl) == needle {
+            return i;
+        }
+        i += 1;
+    }
+    return -1;
+}
+
+public fn join_dir(a: string, b: string) -> string {
+    let ta = trim_slash(a);
+    let tb = trim_slash(b);
+    if ta == "" or ta == "." {
+        return tb;
+    }
+    if tb == "" or tb == "." {
+        return ta;
+    }
+    if ta == "/" {
+        return "/" + tb;
+    }
+    return ta + "/" + tb;
+}
+
+public fn base_name(p: string) -> string {
+    let t = trim_slash(p);
+    let parts = t.split("/");
+    if parts.len() == 0 {
+        return t;
+    }
+    return string(parts[parts.len() - 1]);
+}
+
+public fn first_line(s: string) -> string {
+    for row in string(s).split("\n") {
+        let t = string(row).trim();
+        if t != "" and not t.starts_with("█") and not t.starts_with("╱") and not t.starts_with("╚") {
+            return t;
+        }
+    }
+    return "";
+}
+
+public fn sanitize_ident(s: string) -> string {
+    let out = "";
+    let i = 0;
+    while i < s.len() {
+        let ch = string(s[i]);
+        let ok = (ch >= "a" and ch <= "z") or (ch >= "A" and ch <= "Z") or (ch >= "0" and ch <= "9");
+        if ok {
+            out += ch;
+        }
+        i += 1;
+    }
+    if out == "" {
+        return "App";
+    }
+    return out;
+}
+
+public fn sh_quote(s: string) -> string {
+    return "'" + string(s).replace("'", "'\"'\"'") + "'";
+}
+
+public fn fw_root_abs() -> string {
+    let cached = string(state.get_or("fw_root_abs", ""));
+    if cached != "" {
+        return cached;
+    }
+    let r = if is_windows() {
+        exec_capture("cmd", ["/c", "cd"], null)
+    } else {
+        exec_capture("pwd", [], null)
+    };
+    let res = ".";
+    if r.is_ok() and int(r.unwrap()["code"]) == 0 {
+        let out = trim_slash(first_line(string(r.unwrap()["stdout"])));
+        if out != "" {
+            res = out;
+        }
+    }
+    state.set("fw_root_abs", res);
+    return res;
+}
+
+public fn win_to_wsl(p: string) -> string {
+    let ap = trim_slash(p);
+    if ap == "." {
+        ap = fw_root_abs();
+    } elif ap.len() >= 2 and ap[1] != ":" and not ap.starts_with("/") {
+        ap = join_dir(fw_root_abs(), ap);
+    }
+    if is_windows() and ap.len() >= 2 and ap[1] == ":" {
+        let drv = string(ap[0]).lower();
+        let rest = "";
+        if ap.len() > 2 {
+            if ap[2] == "/" {
+                rest = ap.slice(3, ap.len());
+            } else {
+                rest = ap.slice(2, ap.len());
+            }
+        }
+        return "/mnt/" + drv + "/" + rest;
+    }
+    return ap;
+}
+
+public fn run_exec(cmd: string, cmd_args: list, cwd = null) -> map {
+    let r = exec_capture(cmd, cmd_args, cwd);
+    if r.is_err() {
+        return {
+            "code": 1, "stdout": "", "stderr": string(r.unwrap_err())
+        };
+    }
+    let m = r.unwrap();
+    return {
+        "code": int(m["code"]), "stdout": string(m["stdout"]), "stderr": string(m["stderr"])
+    };
+}
+
+fn cmd_quote_win(s: string) -> string {
+    if s == "" {
+        return "\"\"";
+    }
+    if s.contains(" ") or s.contains("&") or s.contains("(") or s.contains(")") {
+        return "\"" + s.replace("\"", "\\\"") + "\"";
+    }
+    return s;
+}
+
+public fn run_studio_cli(cli_args: list) -> map {
+    if is_windows() {
+        let line = "set SPID3R_PATH=& spid3r run studio.matrix";
+        for a in cli_args {
+            line += " " + cmd_quote_win(string(a));
+        }
+        return run_exec("cmd", ["/c", line], null);
+    }
+    let args2 = ["-u", "SPID3R_PATH", "spid3r", "run", "studio.matrix"];
+    for a in cli_args {
+        args2.push(string(a));
+    }
+    return run_exec("env", args2, null);
+}
+
+public fn run_wsl_bash(cmd_str: string) -> map {
+    let prefix = "if [ -d \"$HOME/.local/share/swiftly/bin\" ]; then PATH=\"$HOME/.local/share/swiftly/bin:$PATH\"; fi; "
+    + "if [ -d \"$HOME/.local/bin\" ]; then PATH=\"$HOME/.local/bin:$PATH\"; fi; export PATH; ";
+    if is_windows() {
+        return run_exec("wsl", ["-e", "bash", "-lc", prefix + cmd_str], null);
+    }
+    return run_exec("bash", ["-lc", prefix + cmd_str], null);
+}
+
+public fn run_shell(cmd_str: string) -> map {
+    if is_windows() {
+        return run_exec("powershell", ["-NoProfile", "-Command", cmd_str], null);
+    }
+    return run_exec("bash", ["-lc", cmd_str], null);
+}
+
+public fn cap_logs(existing: list, text: string, max_lines: int = 180) -> list {
+    let out = [];
+    for item in existing {
+        out.push(string(item));
+    }
+    for row in string(text).split("\n") {
+        let line = string(row).replace("\r", "");
+        if line != "" {
+            out.push(line);
+        }
+    }
+    while out.len() > max_lines {
+        out.remove_at(0);
+    }
+    return out;
+}
+
+fn join_lines(xs: list) -> string {
+    if xs.len() == 0 {
+        return "";
+    }
+    let out = "";
+    let i = 0;
+    while i < xs.len() {
+        if i > 0 {
+            out += "\n";
+        }
+        out += string(xs[i]);
+        i += 1;
+    }
+    return out;
+}
+
+public fn append_log(text: string) {
+    let cur = state.get_list("job_logs");
+    let next = cap_logs(cur, text, 80);
+    state.set("job_logs", next);
+    state.set("job_logs_str", join_lines(next));
+}
+
+public fn append_exec_logs(m: map) {
+    let so = string(m["stdout"]).trim();
+    let se = string(m["stderr"]).trim();
+    if so != "" {
+        append_log(so);
+    }
+    if se != "" {
+        append_log(se);
+    }
+}
+
+public fn clear_logs() {
+    state.set("job_logs", []);
+    state.set("job_logs_str", "");
+    appkit.request_render();
+}
+
+public fn logs_text() -> string {
+    let cached = string(state.get_or("job_logs_str", ""));
+    if cached != "" {
+        return cached;
+    }
+    let xs = state.get_list("job_logs");
+    if xs.len() == 0 {
+        return "(no activity yet — select an action above)";
+    }
+    let out = join_lines(xs);
+    state.set("job_logs_str", out);
+    return out;
+}
+
+public fn parse_test_summary(output: string) -> map {
+    let fmt_ok = output.contains("checking formatting");
+    let check_ok = output.contains("checked ") and output.contains("files cleanly");
+    let suites = 0;
+    let passed = 0;
+    let failed = 0;
+    for row in string(output).split("\n") {
+        let t = string(row).trim();
+        if t.contains("passed:") and t.contains("failed:") {
+            suites += 1;
+            let p_idx = str_find_from(t, "passed:", 0);
+            let f_idx = str_find_from(t, "failed:", 0);
+            if p_idx >= 0 and f_idx > p_idx {
+                let ps = t.slice(p_idx + 7, f_idx).trim();
+                let fs = t.slice(f_idx + 7, t.len()).trim();
+                try {
+                    passed += int(ps);
+                    failed += int(fs);
+                } catch (_e) {
+                    let _ = _e;
+                }
+            }
+        }
+    }
+    return {
+        "fmt_ok": fmt_ok,
+        "check_ok": check_ok,
+        "suites": suites,
+        "passed": passed,
+        "failed": failed,
+        "all_ok": output.contains("test suites passed") and failed == 0,
+    };
+}
+
+public fn run_async(title: string, worker_fn, expand_console: bool = true) -> bool {
+    if state.get_or("job_busy", false) == true {
+        state.set(
+            "toast_msg",
+            "Wait for active task to finish: " + string(state.get_or("job_title", ""))
+        );
+        return false;
+    }
+    state.set("job_busy", true);
+    appkit.set_bg_busy(true);
+    state.set("job_title", title);
+    state.set("job_status", "running");
+    if expand_console {
+        state.set("show_console", true);
+    }
+    append_log(">>> " + title);
+    appkit.request_render();
+
+    spawn fn() {
+        let ok = false;
+        try {
+            ok = worker_fn() == true;
+        } catch (e) {
+            append_log("error: " + string(e));
+            ok = false;
+        }
+        state.set("job_busy", false);
+        if ok {
+            state.set("job_status", "ok");
+            append_log("<<< OK: " + title);
+            if expand_console {
+                state.set("toast_msg", title + " finished");
+            }
+        } else {
+            state.set("job_status", "error");
+            state.set("show_console", true);
+            append_log("<<< FAILED: " + title);
+            state.set("toast_msg", title + " failed (see console)");
+        }
+        appkit.set_bg_busy(false);
+        appkit.request_render();
+    };
+    return true;
+}
+
+public fn detect_lan_ip() -> string {
+    if is_windows() {
+        let r = run_exec("ipconfig", [], null);
+        if int(r["code"]) == 0 {
+            let fallback = "";
+            for row in string(r["stdout"]).split("\n") {
+                let t = string(row).trim();
+                if t.contains("IPv4 Address") or t.contains("IPv4-Adresse") {
+                    let c = str_find_from(t, ":", 0);
+                    if c >= 0 {
+                        let ip = t.slice(c + 1, t.len()).trim();
+                        if ip.starts_with("192.168.") and not ip.starts_with("192.168.160.") {
+                            return ip;
+                        }
+                        if ip != "127.0.0.1" and not ip.starts_with("172.") and fallback == "" {
+                            fallback = ip;
+                        }
+                    }
+                }
+            }
+            if fallback != "" {
+                return fallback;
+            }
+        }
+        return "127.0.0.1";
+    }
+    let r2 = run_exec("bash", ["-lc", "hostname -I 2>/dev/null || true"], null);
+    let parts = first_line(string(r2["stdout"])).split(" ");
+    for p in parts {
+        let ip = string(p).trim();
+        if ip != "" and ip != "127.0.0.1" {
+            return ip;
+        }
+    }
+    return "127.0.0.1";
+}
+
+fn pid_set() -> list {
+    let pids = [];
+    if is_windows() {
+        let out = run_exec(
+            "tasklist",
+            ["/FI",
+            "IMAGENAME eq spid3r.exe",
+            "/FO",
+            "CSV",
+            "/NH"],
+            null
+        );
+        for row in string(out["stdout"]).split("\n") {
+            let t = string(row).trim();
+            if t == "" or not t.contains("spid3r") {
+                continue;
+            }
+            let q1 = str_find_from(t, "\",\"", 0) + 3;
+            let q2 = str_find_from(t, "\"", q1);
+            if q1 > 2 and q2 > q1 {
+                pids.push(t.slice(q1, q2).trim());
+            }
+        }
+        return pids;
+    }
+    let p_out = run_exec("pgrep", ["-x", "spid3r"], null);
+    if int(p_out["code"]) == 0 {
+        for row in string(p_out["stdout"]).split("\n") {
+            let t = string(row).trim();
+            if t != "" {
+                pids.push(t);
+            }
+        }
+    }
+    return pids;
+}
+
+fn list_has(xs: list, v: string) -> bool {
+    for x in xs {
+        if string(x) == v {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn kill_pid(pid: string) {
+    if pid == "" {
+        return;
+    }
+    if is_windows() {
+        run_exec("taskkill", ["/F", "/PID", pid, "/T"], null);
+        return;
+    }
+    run_exec("kill", ["-TERM", pid], null);
+}
+
+public fn start_web_server(appdir: string, host: string, port: string) -> bool {
+    if state.get_or("web_running", false) == true {
+        state.set("toast_msg", "Web server is already running");
+        return false;
+    }
+    let h = if host.trim() == "" {
+        "0.0.0.0"
+    } else {
+        host.trim()
+    };
+    let p = if port.trim() == "" {
+        "8080"
+    } else {
+        port.trim()
+    };
+    let before = pid_set();
+    state.set("web_running", true);
+    state.set("web_host", h);
+    state.set("web_port", p);
+    state.set("web_appdir", appdir);
+    state.set("web_pid", "");
+    append_log(
+        ">>> Starting Web/PWA server for " + appdir + " at http://" + h + ":" + p + "/index.html"
+    );
+    appkit.request_render();
+
+    spawn fn() {
+        let tries = 0;
+        while tries < 25 and state.get_or("web_running", false) == true {
+            sleep_ms(180);
+            let now = pid_set();
+            for item in now {
+                let s = string(item);
+                if not list_has(before, s) {
+                    state.set("web_pid", s);
+                    appkit.request_render();
+                    return;
+                }
+            }
+            tries += 1;
+        }
+    };
+
+    spawn fn() {
+        let m = run_studio_cli(["dev", appdir, "--target", "web", "--host", h, "--port", p]);
+        append_exec_logs(m);
+        state.set("web_running", false);
+        state.set("web_pid", "");
+        append_log("<<< Web server stopped");
+        appkit.request_render();
+    };
+    return true;
+}
+
+public fn stop_web_server() {
+    let pid = string(state.get_or("web_pid", ""));
+    if pid != "" {
+        kill_pid(pid);
+    }
+    state.set("web_running", false);
+    state.set("web_pid", "");
+    append_log(">>> Stopped Web/PWA server");
+    appkit.request_render();
+}
+
+public fn launch_native_preview(appdir: string) {
+    append_log(">>> Launching Desktop window for " + appdir);
+    appkit.request_render();
+    spawn fn() {
+        let m = run_studio_cli(["run", appdir]);
+        append_exec_logs(m);
+        append_log("<<< Desktop preview closed (" + appdir + ")");
+        appkit.request_render();
+    };
+}
+
+public fn launch_native_dev(appdir: string) {
+    append_log(">>> Launching Hot-Reload Desktop window for " + appdir);
+    appkit.request_render();
+    spawn fn() {
+        let m = run_studio_cli(["dev", appdir]);
+        append_exec_logs(m);
+        append_log("<<< Hot-Reload preview closed (" + appdir + ")");
+        appkit.request_render();
+    };
+}
+
+public fn open_terminal(title: string, ps_cmd: string) {
+    if is_windows() {
+        let m = run_exec(
+            "cmd",
+            ["/c",
+            "start",
+            title,
+            "powershell",
+            "-NoExit",
+            "-Command",
+            ps_cmd],
+            null
+        );
+        if int(m["code"]) == 0 {
+            append_log(">>> Opened interactive terminal (" + title + ")");
+            state.set("toast_msg", "Opened terminal window");
+        } else {
+            append_exec_logs(m);
+        }
+        return;
+    }
+    append_log("Run in terminal: " + ps_cmd);
+    state.set("toast_msg", "Command logged to console");
+}
+
+fn is_safe_http_ext_url(t: string) -> bool {
+    let low = t.lower();
+    if not (low.starts_with("https://") or low.starts_with("http://")) {
+        return false;
+    }
+    let bad = [" ", "\t", "\r", "\n", "'", "\"", "`", ";", "&", "|", "<", ">", "$", "(", ")", "{", "}"];
+    for ch in bad {
+        if t.contains(ch) {
+            return false;
+        }
+    }
+    return true;
+}
+
+public fn open_external_url(url: string) -> bool {
+    let t = url.trim();
+    if not is_safe_http_ext_url(t) {
+        return false;
+    }
+    spawn fn() {
+        if is_windows() {
+            let _ = exec_capture(
+                "powershell",
+                ["-NoProfile",
+                "-Command",
+                "Start-Process '" + t + "'"],
+                null
+            );
+        } else {
+            let _ = exec_capture(
+                "bash",
+                ["-lc",
+                "(xdg-open " + sh_quote(t) + " || open " + sh_quote(t) + ") >/dev/null 2>&1 &"],
+                null
+            );
+        }
+    };
+    append_log(">>> Opened browser: " + t);
+    return true;
+}
+
+public fn read_manifest_map(appdir: string) -> map {
+    let r = read_file(join_dir(appdir, "studio.json"));
+    if r.is_err() {
+        return {
+        };
+    }
+    let txt = string(r.unwrap()).trim();
+    let idx = str_find_from(txt, "{", 0);
+    if idx > 0 {
+        txt = txt.slice(idx, txt.len());
+    }
+    try {
+        let m = json_parse(txt);
+        if type_of(m) == "map" {
+            return m;
+        }
+    } catch (_e) {
+        return {
+        };
+    }
+    return {
+    };
+}
+
+public fn project_info(appdir: string) -> map {
+    let clean = trim_slash(appdir);
+    let m = read_manifest_map(clean);
+    let name = base_name(clean);
+    if m.has("name") and string(m["name"]).trim() != "" {
+        name = string(m["name"]);
+    }
+    let bid = "com.example." + sanitize_ident(name).lower();
+    if m.has("bundleID") and string(m["bundleID"]).trim() != "" {
+        bid = string(m["bundleID"]);
+    }
+    let ver = if m.has("version") {
+        string(m["version"])
+    } else {
+        "1.0.0"
+    };
+    let entry = "app.matrix";
+    if m.has("entry") {
+        entry = string(m["entry"]);
+    } elif file_exists(join_dir(clean, "main.matrix")) {
+        entry = "main.matrix";
+    }
+    let swift_name = sanitize_ident(name);
+    return {
+        "path": clean,
+        "valid": file_exists(join_dir(clean, entry)),
+        "has_manifest": file_exists(join_dir(clean, "studio.json")),
+        "name": name,
+        "swift_name": swift_name,
+        "bundle_id": bid,
+        "version": ver,
+        "entry": entry,
+        "has_pages": is_dir(join_dir(clean, "pages")),
+        "has_assets": is_dir(join_dir(clean, "assets")),
+        "has_vendor": is_dir(join_dir(clean, "vendor/studio")),
+        "built_web": file_exists(join_dir(clean, "build/web/index.html")),
+        "built_desktop": is_dir(join_dir(clean, "build/desktop")),
+        "built_android": is_dir(join_dir(clean, "build/android/AndroidApp")),
+        "built_ios": is_dir(join_dir(clean, "build/ios/" + swift_name)),
+        "built_ipa": file_exists(
+            join_dir(clean, "build/ios/" + swift_name + "/xtool/" + swift_name + ".ipa")
+        ),
+    };
+}
+
+fn should_skip_dir(name: string) -> bool {
+    return name == ".git" or name == ".studio-cache" or name == "build" or name == "dist"
+    or name == "gui" or name == "studio" or name == "cli" or name == "tests"
+    or name == "targets" or name == "templates" or name == "tools" or name == "vendor"
+    or name.starts_with("_test_") or name.starts_with(".");
+}
+
+public fn discover_projects() -> list {
+    let found = [];
+    let seen = {
+    };
+    if file_exists("examples/demo/studio.json") {
+        found.push("examples/demo");
+        seen["examples/demo"] = true;
+    }
+    let ex_ld = list_dir("examples");
+    if ex_ld.is_ok() {
+        for item in ex_ld.unwrap() {
+            let n = string(item);
+            let p = "examples/" + n;
+            if is_dir(p) and not seen.has(p) and file_exists(p + "/studio.json") {
+                found.push(p);
+                seen[p] = true;
+            }
+        }
+    }
+    let root_ld = list_dir(".");
+    if root_ld.is_ok() {
+        for item in root_ld.unwrap() {
+            let n = string(item);
+            if should_skip_dir(n) {
+                continue;
+            }
+            if is_dir(n) and not seen.has(n) and file_exists(n + "/studio.json") {
+                found.push(n);
+                seen[n] = true;
+            }
+        }
+    }
+    for custom in storage.get_list("custom_projects") {
+        let cp = trim_slash(string(custom));
+        if cp != "" and not seen.has(cp) and is_dir(cp) {
+            found.push(cp);
+            seen[cp] = true;
+        }
+    }
+    return found;
+}

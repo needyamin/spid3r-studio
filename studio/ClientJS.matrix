@@ -11,6 +11,7 @@ public fn runtime_js() -> string {
   var pendingInputs = Object.create(null);
   var lastPageKey = null;
   var caretState = null;
+  var pollTimer = null;
 
   function cssEsc(s) {
     s = String(s || '');
@@ -22,7 +23,21 @@ public fn runtime_js() -> string {
 
   function postUi(payload) {
     if (window.ipc && typeof window.ipc.postMessage === 'function') {
-      window.ipc.postMessage(JSON.stringify({ event: 'ui', payload: payload }));
+      var pStr = (typeof payload === 'string') ? payload : JSON.stringify(payload);
+      window.ipc.postMessage(JSON.stringify({ event: 'ui', payload: pStr }));
+    }
+  }
+
+  function setPoll(active, intervalMs) {
+    if (active) {
+      if (pollTimer) { return; }
+      var ms = (typeof intervalMs === 'number' && intervalMs >= 50) ? intervalMs : 140;
+      pollTimer = setInterval(function() {
+        postUi({ sid: '__studio_tick__', kind: 'tick', value: '', arg: '' });
+      }, ms);
+    } else if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
     }
   }
 
@@ -574,6 +589,7 @@ public fn runtime_js() -> string {
     morph: patch,
     runEffects: runEffects,
     flushInputs: flushInputs,
+    setPoll: setPoll,
     _pendingCount: function() { return Object.keys(pendingInputs).length; }
   };
 })();"#

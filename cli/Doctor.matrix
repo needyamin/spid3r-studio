@@ -2,6 +2,7 @@
 // Toolchain diagnostics for spid3r, iOS (xtool/swift), and Android (java/gradle/adb/SDK).
 
 import "Exec" as ex;
+import "IosToolchain" as ios_tc;
 
 public fn cmd_doctor() -> int {
     println("AppStudio doctor");
@@ -16,21 +17,35 @@ public fn cmd_doctor() -> int {
         println("[ok] spid3r       " + v);
     }
 
-    let x = ex.probe_version("xtool", ["--version"]);
+    let x = ios_tc.probe_xtool_status();
     if x == "" {
         println("[!] xtool         not found (needed only for the iOS target)");
-        println("    install: https://xtool.sh/documentation/xtooldocs/installation-windows");
+        println("    install: spid3r run studio.matrix ios install-tools");
     } else {
         println("[ok] xtool        " + x);
     }
 
     let sw = ex.probe_version("swift", ["--version"]);
+    if sw == "" and ios_tc.has_wsl() {
+        sw = ios_tc.probe_swift_wsl_status();
+        if sw != "" {
+            sw = sw + " (WSL)";
+        }
+    }
     if sw == "" {
         println(
-            "[!] swift         not found (optional; xtool includes Swift packaging on Linux/macOS/Windows)"
+            "[!] swift         not found (install via swiftly for native iOS builds)"
         );
     } else {
         println("[ok] swift        " + sw);
+        let sdk = ios_tc.probe_darwin_sdk_status();
+        if sdk == "" {
+            println(
+                "[!] Darwin SDK    not installed (run: spid3r run studio.matrix ios sdk-install <Xcode.xip>)"
+            );
+        } else {
+            println("[ok] Darwin SDK   " + sdk);
+        }
     }
 
     let j = ex.probe_version("java", ["-version"]);

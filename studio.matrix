@@ -5,12 +5,14 @@ import "studio/ClientJS" as clientjs;
 import "tools/FlatKit" as flatkit;
 import "cli/Args" as args_cli;
 import "cli/Fs" as fs;
+import "cli/Exec" as ex;
 import "cli/Manifest" as man;
 import "cli/New" as c_new;
 import "cli/RunDev" as c_run;
 import "cli/Doctor" as c_doc;
 import "cli/Dx" as c_dx;
 import "cli/DevWeb" as c_dev_web;
+import "cli/IosToolchain" as c_ios;
 import "cli/BuildWeb" as b_web;
 import "cli/BuildDesktop" as b_desk;
 import "cli/BuildAndroid" as b_and;
@@ -76,6 +78,45 @@ fn main() -> int {
         args_cli.usage();
         return 0;
     }
+    if cmd == "gui" {
+        fs.setup_import_path();
+        let g_root = fs.abs_path(fs.fw_root());
+        let g_entry = fs.abs_path(fs.join_dir(fs.fw_root(), "gui/main.matrix"));
+        let g_host = fs.abs_path(fs.join_dir(fs.fw_root(), "gui/host.html"));
+        let extra = if rest.len() > 0 {
+            string(rest[0]).trim()
+        } else {
+            ""
+        };
+        if fs.is_windows() {
+            let ps_args = "@('gui','" + g_entry.replace("'", "''") + "','--html','"
+            + g_host.replace("'", "''") + "'";
+            if extra != "" {
+                ps_args += ",'" + extra.replace("'", "''") + "'";
+            }
+            ps_args += ")";
+            let ps_cmd = "Start-Process -FilePath 'spid3r' -ArgumentList " + ps_args
+            + " -WorkingDirectory '" + g_root.replace("'", "''") + "' -WindowStyle Hidden";
+            let gr = exec_capture("powershell", ["-NoProfile", "-Command", ps_cmd], null);
+            if gr.is_err() or int(gr.unwrap()["code"]) != 0 {
+                if gr.is_ok() {
+                    ex.flush_child_output(gr.unwrap());
+                }
+                println("error: failed to launch AppStudio Control Center");
+                return 1;
+            }
+            println("AppStudio Control Center launched.");
+            return 0;
+        }
+        let sh_cmd = "nohup spid3r gui " + fs.sh_quote(g_entry) + " --html " + fs.sh_quote(g_host);
+        if extra != "" {
+            sh_cmd += " " + fs.sh_quote(extra);
+        }
+        sh_cmd += " >/dev/null 2>&1 &";
+        exec_capture("bash", ["-lc", sh_cmd], g_root);
+        println("AppStudio Control Center launched.");
+        return 0;
+    }
     if cmd == "new" {
         let name = "";
         let outdir = "";
@@ -113,7 +154,13 @@ fn main() -> int {
                 () => cmd_build(appdir, "web", "")
             );
         }
+        if dev_target == "ios" {
+            return c_ios.cmd_ios_run(appdir, () => cmd_build(appdir, "ios", ""));
+        }
         return c_run.cmd_dev(appdir);
+    }
+    if cmd == "ios" {
+        return c_ios.cmd_ios(rest, (ad) => cmd_build(ad, "ios", ""));
     }
     if cmd == "test" {
         return c_dx.cmd_test(rest);

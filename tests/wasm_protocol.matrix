@@ -435,6 +435,11 @@ public fn studio_app() {
     check_ok(r_cln.is_ok() and int(r_cln.unwrap()["code"]) == 0, "CLI clean ok");
     check_ok(not is_dir(smoke + "/build"), "CLI clean removes build dir");
 
+    let r_ih = exec_capture("spid3r", ["run", "studio.matrix", "ios", "help"], null);
+    check_ok(r_ih.is_ok() and int(r_ih.unwrap()["code"]) == 0, "CLI ios help ok");
+    let r_is = exec_capture("spid3r", ["run", "studio.matrix", "ios", "status"], null);
+    check_ok(r_is.is_ok() and int(r_is.unwrap()["code"]) == 0, "CLI ios status ok");
+
     cleanup([wdir, cdir]);
     println("wasm_protocol passed: " + string(passed) + "  failed: " + string(failed));
     if failed > 0 {

@@ -132,6 +132,7 @@ spid3r run studio.matrix run <appdir>
 spid3r run studio.matrix dev <appdir> [--target web] [--port N]
 spid3r run studio.matrix check <appdir>
 spid3r run studio.matrix build <appdir> [--target web|android|ios|desktop] [-o DIR]
+spid3r run studio.matrix ios <install-tools|status|setup|devices|run> [appdir]
 spid3r run studio.matrix test [filter]
 spid3r run studio.matrix clean [appdir] [--cache]
 spid3r run studio.matrix upgrade <appdir>

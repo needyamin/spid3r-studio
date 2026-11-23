@@ -1,0 +1,30 @@
+// gui/main.matrix
+// Native desktop entry for AppStudio Control Center.
+
+import "app" as app;
+
+fn studio_title(t: string) {
+    gui_title(t);
+}
+
+fn studio_html(h: string) {
+    gui_set_html(h);
+}
+
+fn studio_eval(js: string) {
+    gui_eval(js);
+}
+
+fn studio_on(n: string, cb) {
+    gui_on(n, cb);
+}
+
+fn studio_emit(n: string, p: string) {
+    gui_emit(n, p);
+}
+
+fn main() -> int {
+    return app.studio_app()
+    .bridge(studio_title, studio_html, studio_eval, studio_on, studio_emit)
+    .run();
+}

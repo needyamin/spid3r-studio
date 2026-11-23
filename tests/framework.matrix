@@ -728,6 +728,105 @@ public fn SubPage() -> map {
     theme.reset();
     br.reset();
 
+    // 8. Native GUI 2-arg event bridge, JSON stringified payload, and on-demand __studio_tick__ poll
+    let js_rt = client.runtime_js();
+    check_ok(
+        js_rt.contains("JSON.stringify(payload)") and js_rt.contains("setPoll: setPoll"),
+        "ClientJS runtime_js stringifies payload objects and exposes setPoll"
+    );
+
+    let mock_cbs = {
+    };
+    let mock_evals = [];
+    br.install((t) => {
+        let _ = t;
+    }, (h) => {
+        mock_evals.push(h);
+    }, (js) => {
+        mock_evals.push(js);
+    }, (n, cb) => {
+        mock_cbs[n] = cb;
+    }, (n, p) => {
+        let _ = n; let _p = p;
+    });
+    state.reset();
+    state.set("click_cnt", 0);
+    let ready_ran = false;
+    let gui_app = appkit.App("ClickTest", "sh.test.click", "1.0.0")
+    .page("Home", () => {
+        return ui.page(
+            [
+            ui.text("Count:" + string(state.get_or("click_cnt", 0))),
+            ui.button("Bump", "bump")
+            ]
+        );
+    })
+    .handler("bump", (_ev) => {
+        state.set("click_cnt", int(state.get_or("click_cnt", 0)) + 1);
+    })
+    .on_ready(() => {
+        ready_ran = true;
+        appkit.set_bg_busy(true);
+    });
+    let run_rc = gui_app.run();
+    check_eq(run_rc, 0, "App.run returns 0 immediately without blocking");
+    check_ok(
+        mock_cbs.has("ui") and mock_cbs.has("ready"),
+        "App.run subscribes to ui and ready bridge channels"
+    );
+
+    let cb_ready = mock_cbs["ready"];
+    cb_ready("ready", "");
+    check_ok(ready_ran, "2-arg ready callback invokes App.on_ready");
+    let saw_poll_on = false;
+    for item in mock_evals {
+        if string(item).contains("setPoll(true,140)") {
+            saw_poll_on = true;
+        }
+    }
+    check_ok(saw_poll_on, "on_ready enables native poll when bg_busy is true");
+
+    mock_evals = [];
+    let cb_ui = mock_cbs["ui"];
+    cb_ui("ui", "{\"sid\":\"bump\",\"kind\":\"tap\",\"value\":null,\"arg\":null}");
+    check_eq(
+        state.get("click_cnt"),
+        1,
+        "2-arg ui handler dispatches JSON string payload to button handler"
+    );
+    let saw_count1 = false;
+    for item in mock_evals {
+        if string(item).contains("Count:1") {
+            saw_count1 = true;
+        }
+    }
+    check_ok(saw_count1, "2-arg ui click re-renders updated state");
+
+    mock_evals = [];
+    appkit.set_bg_busy(false);
+    appkit.request_render();
+    state.set("click_cnt", 2);
+    cb_ui("ui", "{\"sid\":\"__studio_tick__\",\"kind\":\"tick\",\"value\":\"\",\"arg\":\"\"}");
+    let saw_count2 = false;
+    let saw_poll_off = false;
+    for item in mock_evals {
+        let si = string(item);
+        if si.contains("Count:2") {
+            saw_count2 = true;
+        }
+        if si.contains("setPoll(false,140)") {
+            saw_poll_off = true;
+        }
+    }
+    check_ok(
+        saw_count2 and saw_poll_off,
+        "__studio_tick__ flushes dirty_render and disables poll when idle"
+    );
+
+    state.reset();
+    theme.reset();
+    br.reset();
+
     println("");
     println("passed: " + string(passed) + "  failed: " + string(failed));
     if failed > 0 {
