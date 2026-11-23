@@ -6,41 +6,41 @@
 <title>Spid3r Studio — Complete Developer Guidelines &amp; Architecture Reference</title>
 <style>
   :root {
-    --bg: #f6f8fc;
+    --bg: #f7f9fc;
     --surface: #ffffff;
-    --surface-2: #eef2f9;
+    --surface-2: #eef2f8;
+    --border: #dce3ee;
     --text: #0f172a;
     --muted: #475569;
-    --border: #dce3ee;
-    --primary: #4f46e5;
-    --primary-soft: rgba(79, 70, 229, 0.1);
-    --accent: #0ea5e9;
-    --ok: #16a34a;
-    --warn: #d97706;
-    --err: #dc2626;
+    --primary: #1d4e7a;
+    --accent: #326791;
+    --primary-soft: rgba(29,78,122,0.10);
+    --ok: #15803d;
+    --warn: #b45309;
+    --err: #b91c1c;
     --code-bg: #0f172a;
     --code-fg: #e2e8f0;
-    --shadow: 0 4px 20px rgba(15, 23, 42, 0.05);
-    --radius: 12px;
+    --shadow: 0 4px 20px rgba(15,23,42,0.05);
+    --radius: 10px;
     --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", sans-serif;
     --mono: ui-monospace, "Cascadia Mono", "Fira Code", Menlo, Consolas, monospace;
   }
   [data-theme="dark"] {
-    --bg: #090d16;
-    --surface: #121a2b;
-    --surface-2: #192338;
-    --text: #f1f5f9;
-    --muted: #94a3b8;
-    --border: #25314d;
-    --primary: #818cf8;
-    --primary-soft: rgba(129, 140, 248, 0.14);
-    --accent: #38bdf8;
-    --ok: #4ade80;
-    --warn: #fbbf24;
-    --err: #f87171;
-    --code-bg: #070b14;
+    --bg: #0d1520;
+    --surface: #16202e;
+    --surface-2: #1d2939;
+    --border: #2b3a4d;
+    --text: #e8eef5;
+    --muted: #9aa9bd;
+    --primary: #8ab4d8;
+    --accent: #6f9fc4;
+    --primary-soft: rgba(138,180,216,0.12);
+    --ok: #5fca92;
+    --warn: #e0a355;
+    --err: #ef8d8d;
+    --code-bg: #070c14;
     --code-fg: #e2e8f0;
-    --shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+    --shadow: 0 6px 24px rgba(0,0,0,0.35);
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
@@ -89,6 +89,8 @@
     color: #e2e8f0;
     border-radius: 6px;
     padding: 4px 10px;
+    min-width: 32px;
+    min-height: 32px;
     font-size: 0.75rem;
     font-family: var(--font);
     cursor: pointer;
@@ -103,6 +105,8 @@
     gap: 28px;
     padding: 24px 20px 64px;
   }
+  /* Prevent the horizontal nav row from forcing the grid wider than the viewport. */
+  .layout > * { min-width: 0; }
   aside.sidebar {
     position: sticky;
     top: 20px;
@@ -157,16 +161,22 @@
   }
   .nav-list a {
     display: block;
-    padding: 7px 10px;
+    min-height: 44px;
+    padding: 11px 12px;
     border-radius: 8px;
     color: var(--muted);
     font-size: 0.88rem;
     font-weight: 500;
   }
-  .nav-list a:hover,
+  .nav-list a:hover {
+    background: var(--surface-2);
+    color: var(--text);
+    text-decoration: none;
+  }
   .nav-list a.active {
     background: var(--primary-soft);
     color: var(--primary);
+    box-shadow: inset 3px 0 0 var(--primary);
     text-decoration: none;
   }
   .sidebar-meta {
@@ -183,9 +193,11 @@
     gap: 24px;
   }
   .hero {
-    background: linear-gradient(135deg, #4f46e5 0%, #0891b2 100%);
-    color: #ffffff;
-    border-radius: 16px;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--primary);
+    border-radius: var(--radius);
     padding: 28px 30px;
     box-shadow: var(--shadow);
   }
@@ -193,25 +205,75 @@
     margin: 0 0 8px;
     font-size: 2rem;
     letter-spacing: -0.02em;
+    color: var(--text);
   }
   .hero p {
     margin: 0 0 16px;
-    color: rgba(255, 255, 255, 0.92);
+    color: var(--muted);
     max-width: 82ch;
   }
   .pill-row {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+    margin-bottom: 18px;
   }
   .pill {
     font-size: 0.8rem;
     font-weight: 600;
-    background: rgba(255, 255, 255, 0.16);
-    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: var(--muted);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
     padding: 4px 11px;
     border-radius: 999px;
   }
+  .pill-version {
+    background: var(--primary-soft);
+    color: var(--primary);
+    border-color: transparent;
+  }
+
+  /* Primary / secondary actions */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-family: var(--font);
+    font-size: 0.9rem;
+    font-weight: 700;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+  }
+  .btn:hover { text-decoration: none; }
+  .btn-primary {
+    background: var(--primary);
+    color: #ffffff;
+    border: 1px solid var(--primary);
+  }
+  .btn-primary:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #ffffff;
+  }
+  .btn-secondary {
+    background: var(--surface);
+    color: var(--primary);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover {
+    background: var(--surface-2);
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+  [data-theme="dark"] .btn-primary,
+  [data-theme="dark"] .btn-primary:hover { color: #0d1520; }
+
+  :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  [data-theme="dark"] :focus-visible { outline-color: var(--accent); }
 
   section.card {
     background: var(--surface);
@@ -236,6 +298,9 @@
   ul, ol { margin: 8px 0 12px; padding-left: 20px; }
   li { margin-bottom: 6px; }
 
+  .table-scroll { overflow-x: auto; }
+  .table-scroll table { min-width: 720px; }
+  .table-scroll tbody tr:nth-child(even) { background: var(--surface-2); }
   table {
     width: 100%;
     border-collapse: collapse;
@@ -276,6 +341,12 @@
     font-size: 0.98rem;
     color: var(--primary);
   }
+  /* Long install/verify commands stay readable inside narrow step cards. */
+  .mini-card pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 0.78rem;
+  }
   .callout {
     background: var(--primary-soft);
     border-left: 4px solid var(--primary);
@@ -285,13 +356,26 @@
     font-size: 0.92rem;
   }
   .callout.warn {
-    background: rgba(217, 119, 6, 0.12);
+    background: rgba(180, 83, 9, 0.10);
     border-left-color: var(--warn);
   }
 
   @media (max-width: 880px) {
     .layout { grid-template-columns: 1fr; }
     aside.sidebar { position: static; }
+    .nav-list {
+      flex-direction: row;
+      overflow-x: auto;
+      white-space: nowrap;
+      padding-bottom: 6px;
+    }
+    .nav-list li { flex: 0 0 auto; margin-bottom: 0; }
+    .nav-list a {
+      display: flex;
+      align-items: center;
+      min-height: 44px;
+    }
+    .copy-btn { min-width: 44px; min-height: 44px; }
   }
 </style>
 </head>
@@ -306,6 +390,7 @@
       <button type="button" class="theme-btn" id="theme-toggle">Theme</button>
     </div>
     <ul class="nav-list">
+      <li><a href="#prerequisites">0. Get Started — Install Spid3r</a></li>
       <li><a href="#architecture">1. 5-Tier A–Z Architecture</a></li>
       <li><a href="#control-panel">2. MVC Control Panel GUI</a></li>
       <li><a href="#developer-guidelines">3. Developer Guidelines</a></li>
@@ -328,6 +413,7 @@
       <h1>Spid3r Studio — Complete Developer Handbook</h1>
       <p>Comprehensive architectural guide, coding standards, Spid3r v1.1.1 language compatibility rules, MVC Control Panel manual, and 6-platform compilation reference for building production applications in <code>.matrix</code>.</p>
       <div class="pill-row">
+        <span class="pill pill-version">Spid3r v1.1.1</span>
         <span class="pill">iOS (.ipa via xtool)</span>
         <span class="pill">Android (Kotlin / APK)</span>
         <span class="pill">Windows / macOS / Linux Native</span>
@@ -335,7 +421,40 @@
         <span class="pill">MVC Control Panel</span>
         <span class="pill">1-Click Failure Recovery</span>
       </div>
+      <a class="btn btn-primary" href="#prerequisites">Download & Install Spid3r</a>
     </header>
+
+    <!-- 0. GET STARTED — INSTALL SPID3R -->
+    <section class="card" id="prerequisites">
+      <h2>0. Get Started — Install Spid3r</h2>
+      <div class="callout">
+        <strong>Required before you begin:</strong> Spid3r Studio is authored in Spid3r v1.1.1 and requires the Spid3r v1.1.1 language/runtime plus the <code>spid3r</code> CLI. Without them installed and on your PATH, none of the <code>spid3r run studio.matrix ...</code> commands in this handbook will work.
+      </div>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>1. Install on Windows</h4>
+          <p>Run the recommended one-click installer: <a href="https://github.com/needyamin/spid3r/releases/download/v1.1.1/Spid3r-Setup-1.1.1.exe">Spid3r-Setup-1.1.1.exe</a>.</p>
+          <p>The <a href="https://github.com/needyamin/spid3r/releases/tag/v1.1.1">v1.1.1 release</a> is marked Latest and includes prebuilt <code>spid3r</code> binaries and checksums.</p>
+        </div>
+        <div class="mini-card">
+          <h4>2. Linux / macOS</h4>
+          <p>Install with the official script:</p>
+<pre><code>curl -fsSL https://raw.githubusercontent.com/needyamin/spid3r/main/install.sh | sh</code></pre>
+          <p>Verify the download against <a href="https://github.com/needyamin/spid3r/releases/download/v1.1.1/sha256sums.txt">sha256sums.txt</a>, also linked from the release page. If <code>spid3r</code> is not recognized afterward, reopen your terminal once to refresh PATH.</p>
+        </div>
+        <div class="mini-card">
+          <h4>3. Verify your setup</h4>
+          <p>Audit the environment from the repository root:</p>
+<pre><code>spid3r run studio.matrix doctor</code></pre>
+          <p>Run that command from the repository root; it checks that the language runtime, CLI, and toolchain are wired up correctly.</p>
+        </div>
+      </div>
+      <p>
+        <a class="btn btn-primary" href="https://github.com/needyamin/spid3r/releases/download/v1.1.1/Spid3r-Setup-1.1.1.exe">Download Spid3r-Setup-1.1.1.exe</a>
+        <a class="btn btn-secondary" href="https://github.com/needyamin/spid3r/releases/tag/v1.1.1">View all downloads &amp; checksums</a>
+      </p>
+      <p>New to <code>.matrix</code>? Read the <a href="tutorials/matrix-language-tutorial.md">matrix-language-tutorial.md</a> language tutorial.</p>
+    </section>
 
     <!-- 1. 5-TIER A-Z ARCHITECTURE -->
     <section class="card" id="architecture">
@@ -343,6 +462,7 @@
       <p>Spid3r Studio enforces a strict <strong>5-folder root architecture</strong> so frameworks, large binary downloads, developer documentation, user application workspaces, and core engine tools never mix.</p>
       <p style="margin: 14px 0;"><img src="diagrams/architecture-overview.svg" alt="Spid3r Studio 5-Tier Architecture and 6-Platform Pipeline" style="width:100%;height:auto;border-radius:12px;display:block;"></p>
 
+      <div class="table-scroll">
       <table>
         <thead>
           <tr>
@@ -379,6 +499,7 @@
           </tr>
         </tbody>
       </table>
+      </div>
     </section>
 
     <!-- 2. MVC CONTROL PANEL GUI -->
@@ -504,6 +625,7 @@ fn main() -> int {
       <h2>4. Verified Spid3r v1.1.1 &amp; <code>.matrix</code> Compatibility Rules</h2>
       <p>Spid3r is a newly developed language with strict parser, formatter, and VM behaviors. Follow these <strong>10 mandatory rules</strong> (corresponding to verified issues <code>BUG-01</code>..<code>BUG-10</code> in <code>bugs.html</code>) whenever writing <code>.matrix</code> files:</p>
 
+      <div class="table-scroll">
       <table>
         <thead>
           <tr>
@@ -555,6 +677,7 @@ fn main() -> int {
           </tr>
         </tbody>
       </table>
+      </div>
     </section>
 
     <!-- 5. DECLARATIVE UI COMPONENTS -->
@@ -562,6 +685,7 @@ fn main() -> int {
       <h2>5. Declarative UI Component Reference (<code>frameworks/studio/Components.matrix</code>)</h2>
       <p>Import <code>"studio/Components" as ui;</code> to build responsive mobile and desktop layouts. Every widget accepts an optional trailing <code>props: map</code> supporting <code>"cls"</code>, <code>"key"</code>, <code>"flex"</code>, <code>"width"</code>, <code>"gap"</code>, <code>"pad"</code>, <code>"disabled"</code>, <code>"role"</code>, and <code>"aria_label"</code>.</p>
 
+      <div class="table-scroll">
       <table>
         <thead>
           <tr>
@@ -633,6 +757,7 @@ fn main() -> int {
           </tr>
         </tbody>
       </table>
+      </div>
     </section>
 
     <!-- 6. STATE, STORAGE, ROUTER & HTTP -->
@@ -702,6 +827,7 @@ fn main() -> int {
     <section class="card" id="platforms">
       <h2>8. Cross-Platform Build &amp; Deployment Pipelines (6 OS)</h2>
       <p style="margin: 14px 0;"><img src="diagrams/runtime-protocol.svg" alt="Dual-Mode Runtime Architecture and Atomic STUDIO_FRAME Protocol" style="width:100%;height:auto;border-radius:12px;display:block;"></p>
+      <div class="table-scroll">
       <table>
         <thead>
           <tr>
@@ -738,6 +864,7 @@ fn main() -> int {
           </tr>
         </tbody>
       </table>
+      </div>
     </section>
 
     <!-- 9. DIAGNOSTICS, QA & RECOVERY -->
@@ -793,7 +920,7 @@ spid3r run studio.matrix doctor</code></pre>
   var root = document.documentElement;
   var saved = null;
   try { saved = localStorage.getItem("studio_docs_theme"); } catch (_e) {}
-  if (saved === "dark" || (!saved && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+  if (saved === "dark") {
     root.setAttribute("data-theme", "dark");
   }
   var btn = document.getElementById("theme-toggle");

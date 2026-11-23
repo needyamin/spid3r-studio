@@ -37,5 +37,6 @@ __pycache__/
 Thumbs.db
 
 # Local agent memory & local-only Spid3r bug tracker (never push to GitHub)
+.workbuddy-ai/
 AGENTS.md
 bugs.html
