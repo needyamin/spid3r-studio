@@ -78,6 +78,21 @@ public fn probe_spid3r_version() -> string {
     return probe_version("spid3r", ["--version"]);
 }
 
+/// Return true if the installed spid3r binary includes gui_* builtins (--features gui).
+public fn supports_gui_builtins() -> bool {
+    let probe = fs.join_dir(fs.fw_root(), "._tmp_gui_probe.matrix");
+    let wr = write_file(probe, "fn main() -> int {\n    gui_title(\"\");\n    return 0;\n}\n");
+    if wr.is_err() {
+        return true;
+    }
+    let r = exec_capture("spid3r", ["check", probe], null);
+    let _rm = remove_file(probe);
+    if r.is_err() {
+        return false;
+    }
+    return int(r.unwrap()["code"]) == 0;
+}
+
 fn is_hex_sha256(s: string) -> bool {
     let t = string(s).trim().lower();
     if t.len() != 64 {

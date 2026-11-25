@@ -199,6 +199,13 @@ public fn cmd_check(appdir: string) -> int {
         println("error: no app entry found in " + appdir);
         return 2;
     }
+    if not ex.supports_gui_builtins() and fs.base_name(entry) == "main.matrix" {
+        let app_entry = fs.join_dir(appdir, "app.matrix");
+        if file_exists(app_entry) {
+            entry = app_entry;
+            println("note: headless spid3r binary (no gui_* builtins); checking " + entry);
+        }
+    }
     fs.setup_import_path();
     let r = exec_capture("spid3r", ["check", entry], null);
     if r.is_err() {

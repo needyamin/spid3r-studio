@@ -122,6 +122,8 @@ public fn cmd_test(rest: list) -> int {
     }
 
     fs.setup_import_path();
+    let has_gui = ex.supports_gui_builtins();
+    let skipped_gui = 0;
     let import_files = [];
     for f in all_files {
         let rel = f;
@@ -131,12 +133,25 @@ public fn cmd_test(rest: list) -> int {
         if rel == "studio.matrix" or rel.starts_with("core/cli/") {
             continue;
         }
+        if not has_gui and fs.base_name(f) == "main.matrix" {
+            let rf = read_file(f);
+            if rf.is_ok() and string(rf.unwrap()).contains("gui_title(") {
+                skipped_gui += 1;
+                continue;
+            }
+        }
         import_files.push(f);
     }
     if not check_files(import_files) {
         return 1;
     }
-    println("  checked " + string(all_files.len()) + " files cleanly");
+    if skipped_gui > 0 {
+        println(
+            "  checked " + string(all_files.len() - skipped_gui) + " files cleanly (skipped " + string(skipped_gui) + " gui_* entry shim(s) on headless spid3r)"
+        );
+    } else {
+        println("  checked " + string(all_files.len()) + " files cleanly");
+    }
 
     println("[3/3] running test suites...");
     let test_dir = fs.join_dir(root, "core/tests");
