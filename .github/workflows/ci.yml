@@ -13,7 +13,18 @@ jobs:
 
       - name: Install Spid3r v1.1.1
         run: |
-          curl -fsSL https://raw.githubusercontent.com/needyamin/spid3r/main/install.sh | sh
+          sudo apt-get update -qq -o Acquire::Retries=3
+          sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 ca-certificates curl gnupg lsb-release
+          curl -fsSL --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor --yes -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          CODENAME="$(lsb_release -cs)"
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] https://apt.llvm.org/${CODENAME}/ llvm-toolchain-${CODENAME}-23 main" | sudo tee /etc/apt/sources.list.d/llvm-23.list >/dev/null
+          sudo apt-get update -qq -o Acquire::Retries=3
+          sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 libllvm23
+          sudo ldconfig
+          if [ -d /usr/lib/llvm-23/lib ]; then
+            echo "LD_LIBRARY_PATH=/usr/lib/llvm-23/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          fi
+          curl -fsSL --retry 3 https://raw.githubusercontent.com/needyamin/spid3r/main/install.sh | sh -s -- --no-modify-path --no-editor-ext
           echo "$HOME/.spid3r/bin" >> "$GITHUB_PATH"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
@@ -56,13 +67,38 @@ jobs:
 
       - name: Install Spid3r v1.1.1
         run: |
-          curl -fsSL https://raw.githubusercontent.com/needyamin/spid3r/main/install.sh | sh
+          sudo apt-get update -qq -o Acquire::Retries=3
+          sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 ca-certificates curl gnupg lsb-release
+          curl -fsSL --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor --yes -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          CODENAME="$(lsb_release -cs)"
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] https://apt.llvm.org/${CODENAME}/ llvm-toolchain-${CODENAME}-23 main" | sudo tee /etc/apt/sources.list.d/llvm-23.list >/dev/null
+          sudo apt-get update -qq -o Acquire::Retries=3
+          sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 libllvm23
+          sudo ldconfig
+          if [ -d /usr/lib/llvm-23/lib ]; then
+            echo "LD_LIBRARY_PATH=/usr/lib/llvm-23/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          fi
+          curl -fsSL --retry 3 https://raw.githubusercontent.com/needyamin/spid3r/main/install.sh | sh -s -- --no-modify-path --no-editor-ext
           echo "$HOME/.spid3r/bin" >> "$GITHUB_PATH"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Guard — verify spid3r binary is on PATH
         run: |
           command -v spid3r >/dev/null 2>&1 || { echo "spid3r not on PATH — gate did not run"; exit 1; }
+          spid3r --version
+
+      - name: Set up JDK 17 (Android)
+        if: matrix.target == 'android'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.5 (Android)
+        if: matrix.target == 'android'
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.5'
 
       - name: Build workspace/demo for ${{ matrix.target }}
         run: |
@@ -114,7 +150,18 @@ jobs:
 
       - name: Install Spid3r v1.1.1
         run: |
-          curl -fsSL https://raw.githubusercontent.com/needyamin/spid3r/main/install.sh | sh
+          sudo apt-get update -qq -o Acquire::Retries=3
+          sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 ca-certificates curl gnupg lsb-release
+          curl -fsSL --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor --yes -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          CODENAME="$(lsb_release -cs)"
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] https://apt.llvm.org/${CODENAME}/ llvm-toolchain-${CODENAME}-23 main" | sudo tee /etc/apt/sources.list.d/llvm-23.list >/dev/null
+          sudo apt-get update -qq -o Acquire::Retries=3
+          sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 libllvm23
+          sudo ldconfig
+          if [ -d /usr/lib/llvm-23/lib ]; then
+            echo "LD_LIBRARY_PATH=/usr/lib/llvm-23/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          fi
+          curl -fsSL --retry 3 https://raw.githubusercontent.com/needyamin/spid3r/main/install.sh | sh -s -- --no-modify-path --no-editor-ext
           echo "$HOME/.spid3r/bin" >> "$GITHUB_PATH"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
