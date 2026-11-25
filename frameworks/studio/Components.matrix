@@ -376,3 +376,28 @@ public fn empty(icon: string, title: string, subtitle: string = "") -> map {
     return node("empty", {
     }, kids);
 }
+
+/// Keyed, composable component boundary with optional props-based memoization (A-08).
+/// render_fn(props: map) -> node. When memo is true (default), pure/named-handler outputs are
+/// cached by (name, key, props) and automatically bypassed if ephemeral closure slots are emitted.
+public fn component(
+    name: string,
+    props: map,
+    render_fn,
+    key: string = "",
+    memo: bool = true
+) -> map {
+    let k = if key != "" {
+        key
+    } else {
+        name
+    };
+    return node("component", {
+        "name": name, "props": props, "render": render_fn, "key": k, "memo": memo
+    }, []);
+}
+
+/// Convenience alias for a memoized keyed component boundary (A-08).
+public fn memo(name: string, props: map, render_fn, key: string = "") -> map {
+    return component(name, props, render_fn, key, true);
+}

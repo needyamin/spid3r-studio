@@ -1,0 +1,63 @@
+// studio/Errors.matrix
+// Typed application error model and Result helpers (A-27).
+
+public class AppError {
+    public let code;
+    public let message;
+    public let cause;
+    public let retryable;
+
+    fn new (code: string, message: string, cause: string = "", retryable: bool = false) {
+        self.code = code;
+        self.message = message;
+        self.cause = cause;
+        self.retryable = retryable;
+    }
+
+    public fn format(self) -> string {
+        if string(self.cause) != "" {
+            return "[" + string(self.code) + "] " + string(self.message) + " (cause: " + string(
+                self.cause
+            ) + ")";
+        }
+        return "[" + string(self.code) + "] " + string(self.message);
+    }
+
+    public fn to_map(self) -> map {
+        return {
+            "code": string(self.code),
+            "message": string(self.message),
+            "cause": string(self.cause),
+            "retryable": self.retryable == true,
+        };
+    }
+}
+
+/// Construct a typed AppError.
+public fn make(
+    code: string,
+    message: string,
+    cause: string = "",
+    retryable: bool = false
+) -> AppError {
+    return AppError(code, message, cause, retryable);
+}
+
+/// Wrap a success value in a structured Result map.
+public fn ok_result(value) -> map {
+    return {
+        "ok": true, "value": value, "error": null
+    };
+}
+
+/// Wrap a typed AppError in a structured Result map.
+public fn err_result(err: AppError) -> map {
+    return {
+        "ok": false, "value": null, "error": err
+    };
+}
+
+/// True when r is a successful Result map.
+public fn is_ok_result(r: map) -> bool {
+    return r != null and type_of(r) == "map" and r.has("ok") and r["ok"] == true;
+}

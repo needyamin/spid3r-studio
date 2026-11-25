@@ -129,6 +129,40 @@ fn int_field_or(obj: map, key: string, dflt: string, minv: int) -> string {
     return dflt;
 }
 
+fn is_alpha_ascii(c: string) -> bool {
+    return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z");
+}
+
+fn is_bundle_seg_char(c: string) -> bool {
+    return is_alpha_ascii(c) or (c >= "0" and c <= "9") or c == "_" or c == "-";
+}
+
+/// Strict reverse-DNS bundle identifier validation (A-43): prevents Kotlin/YAML injection.
+public fn is_valid_bundle_id(bid: string) -> bool {
+    let s = string(bid).trim();
+    if s == "" or s != string(bid) or s.len() > 150 {
+        return false;
+    }
+    let parts = s.split(".");
+    if parts.len() < 2 {
+        return false;
+    }
+    for raw_seg in parts {
+        let seg = string(raw_seg);
+        if seg.len() == 0 or not is_alpha_ascii(seg[0]) {
+            return false;
+        }
+        let i = 1;
+        while i < seg.len() {
+            if not is_bundle_seg_char(seg[i]) {
+                return false;
+            }
+            i += 1;
+        }
+    }
+    return true;
+}
+
 public fn android_min_sdk_of(appdir: string) -> string {
     let m = read_manifest(appdir);
     if m.has("android") and type_of(m["android"]) == "map" {
@@ -145,7 +179,37 @@ public fn android_target_sdk_of(appdir: string) -> string {
     return "34";
 }
 
+/// Independent compileSdk pin (A-47): defaults to manifest android.compileSdk or max(34, targetSdk).
+public fn android_compile_sdk_of(appdir: string) -> string {
+    let m = read_manifest(appdir);
+    if m.has("android") and type_of(m["android"]) == "map" {
+        let am = m["android"];
+        if am.has("compileSdk") {
+            return int_field_or(am, "compileSdk", "34", 24);
+        }
+    }
+    let t = int(android_target_sdk_of(appdir));
+    if t > 34 {
+        return string(t);
+    }
+    return "34";
+}
+
 public fn app_version_code_of(appdir: string) -> string {
+    let ev_vc = env("STUDIO_VERSION_CODE");
+    if string(ev_vc) != "none" {
+        let raw_vc = string(ev_vc.unwrap()).trim();
+        if raw_vc != "" {
+            try {
+                let iv = int(raw_vc);
+                if iv >= 1 {
+                    return string(iv);
+                }
+            } catch (_e) {
+                let _skip = _e;
+            }
+        }
+    }
     let m = read_manifest(appdir);
     if m.has("android") and type_of(m["android"]) == "map" {
         let am = m["android"];
@@ -159,6 +223,40 @@ public fn app_version_code_of(appdir: string) -> string {
     return "1";
 }
 
+/// Explicit Android cleartext HTTP traffic policy from studio.json (A-18). Default false.
+public fn android_cleartext_of(appdir: string) -> bool {
+    let m = read_manifest(appdir);
+    if m.has("android") and type_of(m["android"]) == "map" and m["android"].has("cleartext") {
+        return m["android"]["cleartext"] == true;
+    }
+    if m.has("network") and type_of(m["network"]) == "map" and m["network"].has("cleartext") {
+        return m["network"]["cleartext"] == true;
+    }
+    return false;
+}
+
+/// Optional Android cleartext-allowed hostnames from studio.json (A-18).
+public fn android_cleartext_domains_of(appdir: string) -> list {
+    let m = read_manifest(appdir);
+    let raw = null;
+    if m.has("android") and type_of(m["android"]) == "map" and m["android"].has("cleartextDomains") {
+        raw = m["android"]["cleartextDomains"];
+    } elif m.has("network") and type_of(m["network"]) == "map" and m["network"].has("cleartextDomains") {
+        raw = m["network"]["cleartextDomains"];
+    }
+    let out = [];
+    if raw != null and type_of(raw) == "list" {
+        for item in raw {
+            let d = string(item).trim().lower();
+            if d != "" and not d.contains("/") and not d.contains("<") and not d.contains(">") and not d.contains("\"") {
+                out.push(d);
+            }
+        }
+    }
+    return out;
+}
+
+/// Validated SwiftPM 6.0 iOS deployment target against supported Apple platform versions (A-45).
 public fn ios_deployment_target_of(appdir: string) -> string {
     let m = read_manifest(appdir);
     if m.has("ios") and type_of(m["ios"]) == "map" and m["ios"].has("deploymentTarget") {
@@ -167,16 +265,56 @@ public fn ios_deployment_target_of(appdir: string) -> string {
         if dot > 0 {
             raw = raw.slice(0, dot);
         }
-        try {
-            let v = int(raw);
-            if v >= 13 and v <= 30 {
-                return string(v);
+        for known in ["13", "14", "15", "16", "17", "18"] {
+            if raw == known {
+                return known;
             }
-        } catch (_e) {
-            return "17";
         }
     }
     return "17";
+}
+
+/// Explicit iOS ATS NSAllowsArbitraryLoads policy from studio.json (A-15). Default false.
+public fn ios_allows_arbitrary_loads_of(appdir: string) -> bool {
+    let m = read_manifest(appdir);
+    if m.has("ios") and type_of(m["ios"]) == "map" and m["ios"].has("allowsArbitraryLoads") {
+        return m["ios"]["allowsArbitraryLoads"] == true;
+    }
+    return false;
+}
+
+/// Supported iOS interface orientations from studio.json (A-15).
+public fn ios_orientations_of(appdir: string) -> list {
+    let m = read_manifest(appdir);
+    let allowed = [
+    "UIInterfaceOrientationPortrait",
+    "UIInterfaceOrientationPortraitUpsideDown",
+    "UIInterfaceOrientationLandscapeLeft",
+    "UIInterfaceOrientationLandscapeRight",
+    ];
+    let out = [];
+    if m.has("ios") and type_of(m["ios"]) == "map" and m["ios"].has("orientations") {
+        let raw = m["ios"]["orientations"];
+        if type_of(raw) == "list" {
+            for item in raw {
+                let s = string(item).trim();
+                for ok_val in allowed {
+                    if s == ok_val {
+                        out.push(s);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if out.len() == 0 {
+        return [
+        "UIInterfaceOrientationPortrait",
+        "UIInterfaceOrientationLandscapeLeft",
+        "UIInterfaceOrientationLandscapeRight",
+        ];
+    }
+    return out;
 }
 
 public fn validate_manifest(appdir: string) -> list {
@@ -192,6 +330,11 @@ public fn validate_manifest(appdir: string) -> list {
     }
     if not m.has("name") or string(m["name"]).trim() == "" {
         issues.push("studio.json 'name' is empty");
+    }
+    if m.has("bundleID") and not is_valid_bundle_id(string(m["bundleID"])) {
+        issues.push(
+            "studio.json 'bundleID' must be a valid reverse-DNS identifier (e.g. com.example.app)"
+        );
     }
     if m.has("icon") and string(m["icon"]).trim() != "" and app_icon_of(appdir) == "" {
         issues.push("studio.json 'icon' file not found: " + string(m["icon"]));
@@ -211,7 +354,7 @@ public fn validate_manifest(appdir: string) -> list {
             issues.push("studio.json 'android' must be an object");
         } else {
             let am = m["android"];
-            for k in ["minSdk", "targetSdk", "versionCode"] {
+            for k in ["minSdk", "targetSdk", "compileSdk", "versionCode"] {
                 if am.has(k) {
                     try {
                         let _n = int(am[k]);
@@ -223,4 +366,221 @@ public fn validate_manifest(appdir: string) -> list {
         }
     }
     return issues;
+}
+
+fn is_valid_custom_scheme(raw: string) -> bool {
+    let s = raw.trim().lower();
+    if s == "" or s.len() > 40 {
+        return false;
+    }
+    if s == "http" or s == "https" or s == "javascript" or s == "data" or s == "file" or s == "vbscript" {
+        return false;
+    }
+    if not (s[0] >= "a" and s[0] <= "z") {
+        return false;
+    }
+    let i = 1;
+    while i < s.len() {
+        let c = s[i];
+        let ok = (c >= "a" and c <= "z") or (c >= "0" and c <= "9") or c == "+" or c == "-" or c == ".";
+        if not ok {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+/// Custom deep-link / OAuth redirect URL schemes configured in studio.json (A-53).
+/// Reads `deepLinks` (list), `urlSchemes` (list), and `auth.redirectScheme` (string).
+public fn app_url_schemes_of(appdir: string) -> list {
+    let m = read_manifest(appdir);
+    let out = [];
+    let seen = {
+    };
+    let add_scheme = (raw_v) => {
+        let s = string(raw_v).trim().lower();
+        if s.ends_with("://") {
+            s = s.slice(0, s.len() - 3);
+        } elif s.ends_with(":") {
+            s = s.slice(0, s.len() - 1);
+        }
+        if is_valid_custom_scheme(s) and not seen.has(s) {
+            seen[s] = true;
+            out.push(s);
+        }
+    };
+    for key in ["deepLinks", "urlSchemes"] {
+        if m.has(key) and type_of(m[key]) == "list" {
+            for item in m[key] {
+                add_scheme(item);
+            }
+        }
+    }
+    if m.has("auth") and type_of(m["auth"]) == "map" and m["auth"].has("redirectScheme") {
+        add_scheme(m["auth"]["redirectScheme"]);
+    }
+    return out;
+}
+
+fn is_safe_csp_token(tok: string) -> bool {
+    let s = tok.trim();
+    if s == "" or s.len() > 256 {
+        return false;
+    }
+    for bad in [";", "\"", "<", ">", "\r", "\n", " ", "\t"] {
+        if s.contains(bad) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Per-app CSP connect-src directives from studio.json (`security.connectSrc` or `csp.connectSrc`) (A-31).
+/// Drops cleartext `http:` by default unless explicitly listed in studio.json.
+public fn csp_connect_src_of(appdir: string) -> string {
+    let m = read_manifest(appdir);
+    let raw = null;
+    if m.has("security") and type_of(m["security"]) == "map" and m["security"].has("connectSrc") {
+        raw = m["security"]["connectSrc"];
+    } elif m.has("csp") and type_of(m["csp"]) == "map" and m["csp"].has("connectSrc") {
+        raw = m["csp"]["connectSrc"];
+    }
+    let parts = ["'self'", "appstudio:"];
+    let seen = {
+        "'self'": true, "appstudio:": true
+    };
+    if raw != null and type_of(raw) == "list" and raw.len() > 0 {
+        for item in raw {
+            let tok = string(item).trim();
+            if is_safe_csp_token(tok) and not seen.has(tok) {
+                seen[tok] = true;
+                parts.push(tok);
+            }
+        }
+    } else {
+        parts.push("https:");
+    }
+    return parts.join(" ");
+}
+
+/// Build the full Content-Security-Policy meta value for wasmhost.template.html (A-31).
+public fn build_wasm_csp(appdir: string, release: bool = false) -> string {
+    let conn = csp_connect_src_of(appdir);
+    let extra = if release {
+        " upgrade-insecure-requests;"
+    } else {
+        ""
+    };
+    return "default-src 'self' data: blob: https: appstudio:; "
+    + "connect-src " + conn + "; "
+    + "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; "
+    + "worker-src 'self' blob:; "
+    + "style-src 'self' 'unsafe-inline'; "
+    + "img-src 'self' data: blob: https: appstudio:; "
+    + "object-src 'none'; base-uri 'none'; form-action 'self';" + extra;
+}
+
+/// Emit a CycloneDX 1.5 Software Bill of Materials (sbom.json) alongside build outputs (A-14).
+public fn emit_sbom(
+    appdir: string,
+    outdir: string,
+    target: string,
+    release: bool = false
+) -> bool {
+    let name = app_name_of(appdir);
+    let bid = app_bundle_id_of(appdir);
+    let ver = app_version_of(appdir);
+    let mode_s = if release {
+        "release"
+    } else {
+        "debug"
+    };
+    let components = [
+    {
+        "type": "framework",
+        "name": "appstudio-framework",
+        "version": "1.1.1",
+        "purl": "pkg:generic/appstudio-framework@1.1.1",
+    }
+    ,
+    {
+        "type": "application",
+        "name": "spid3r-runtime",
+        "version": "1.1.1",
+        "purl": "pkg:generic/spid3r@1.1.1",
+    }
+    ,
+    ];
+    if target == "android" {
+        components.push({
+            "type": "library",
+            "name": "androidx.activity:activity",
+            "version": "1.8.2",
+            "purl": "pkg:maven/androidx.activity/activity@1.8.2",
+        });
+        components.push({
+            "type": "library",
+            "name": "androidx.webkit:webkit",
+            "version": "1.10.0",
+            "purl": "pkg:maven/androidx.webkit/webkit@1.10.0",
+        });
+    } elif target == "ios" {
+        components.push({
+            "type": "library",
+            "name": "Apple-WebKit-SwiftUI-Security",
+            "version": "iOS-" + ios_deployment_target_of(appdir),
+            "purl": "pkg:generic/apple-ios-sdk@" + ios_deployment_target_of(appdir),
+        });
+    }
+    let fw_dir = fs.join_dir(fs.fw_root(), "frameworks/studio");
+    let ld = list_dir(fw_dir);
+    if ld.is_ok() {
+        let mods = [];
+        for item in ld.unwrap() {
+            let fnm = string(item);
+            if fnm.ends_with(".matrix") {
+                mods.push(fnm);
+            }
+        }
+        mods.sort();
+        for fm in mods {
+            components.push({
+                "type": "file",
+                "name": "frameworks/studio/" + string(fm),
+                "version": "1.1.1",
+            });
+        }
+    }
+    let sbom = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "version": 1,
+        "metadata": {
+            "component": {
+                "type": "application",
+                "name": name,
+                "version": ver,
+                "group": bid,
+            }
+            ,
+            "properties": [
+            {
+                "name": "appstudio:target", "value": target
+            }
+            ,
+            {
+                "name": "appstudio:mode", "value": mode_s
+            }
+            ,
+            {
+                "name": "appstudio:versionCode", "value": app_version_code_of(appdir)
+            }
+            ,
+            ],
+        }
+        ,
+        "components": components,
+    };
+    return fs.write_checked(fs.join_dir(outdir, "sbom.json"), json_write(sbom) + "\n");
 }

@@ -5,7 +5,12 @@ import "Fs" as fs;
 import "Manifest" as man;
 import "Exec" as ex;
 
-public fn build(appdir: string, entry: string, outdir: string) -> int {
+public fn build(
+    appdir: string,
+    entry: string,
+    outdir: string,
+    release: bool = false
+) -> int {
     fs.ensure_dir(outdir);
     fs.setup_import_path();
     let name = man.app_name_of(appdir);
@@ -17,7 +22,12 @@ public fn build(appdir: string, entry: string, outdir: string) -> int {
         ""
     };
     let out_bin = outdir + "/" + name + ext;
-    println("building desktop app -> " + out_bin);
+    let mode_lbl = if release {
+        "release"
+    } else {
+        "debug"
+    };
+    println("building desktop app (" + mode_lbl + ") -> " + out_bin);
 
     let bc = outdir + "/._tmp_" + fs.sanitize_swift_ident(name) + ".matrixc";
     if not ex.run_checked("spid3r", ["compile", entry, "-o", bc], "compiling") {
@@ -61,6 +71,39 @@ public fn build(appdir: string, entry: string, outdir: string) -> int {
     }
     if not fs.copy_app_assets(appdir, outdir) {
         return 1;
+    }
+    if not man.emit_sbom(appdir, outdir, "desktop", release) {
+        return 1;
+    }
+    if release {
+        let sign_env = env("STUDIO_DESKTOP_SIGN_CMD");
+        if string(sign_env) != "none" {
+            let sign_cmd = string(sign_env.unwrap()).trim();
+            if sign_cmd != "" {
+                let full_cmd = sign_cmd.replace("\{\{BINARY\}\}", fs.abs_path(out_bin));
+                if full_cmd == sign_cmd {
+                    full_cmd = sign_cmd + " " + fs.sh_quote(fs.abs_path(out_bin));
+                }
+                let s_ok = if fs.is_windows() {
+                    ex.run_checked(
+                        "powershell",
+                        ["-NoProfile",
+                        "-Command",
+                        full_cmd],
+                        "signing"
+                    )
+                } else {
+                    ex.run_checked("bash", ["-lc", full_cmd], "signing")
+                };
+                if not s_ok {
+                    return 1;
+                }
+            }
+        } else {
+            println(
+                "  note: set STUDIO_DESKTOP_SIGN_CMD to run an automatic code-signing hook on --release."
+            );
+        }
     }
     println("done: " + out_bin + " (self-contained binary)");
     return 0;

@@ -1,0 +1,443 @@
+// studio/Store.matrix
+// Object-oriented storage abstraction: interface Store, MemoryStore, FileStore, and DI Container (H2a).
+
+import "Util" as U;
+import "Errors" as errors;
+
+/// Key/value store contract enforced at compile time via Spid3r interfaces.
+public interface Store {
+    fn get(self, k: string, dflt) -> any;
+    fn set(self, k: string, v);
+    fn remove(self, k: string);
+    fn all(self) -> map;
+    fn version(self) -> int;
+    fn reset(self);
+}
+
+/// Polymorphic helper accepting any Store implementation (checked statically against interface Store).
+public fn read_or(s: Store, k: string, dflt) -> any {
+    return s.get(k, dflt);
+}
+
+/// Pure in-memory Store with defensive deep-copy isolation (zero disk I/O — ideal test double).
+public class MemoryStore implements Store {
+    private let data;
+    private let ver;
+    private let dirty;
+    private let schema_ver;
+
+    fn new () {
+        self.data = {
+        };
+        self.ver = 0;
+        self.dirty = false;
+        self.schema_ver = 0;
+    }
+
+    public fn schema_version(self) -> int {
+        if self.data.has("__schema_version") {
+            return U.ival(self.data, "__schema_version", int(self.schema_ver));
+        }
+        return int(self.schema_ver);
+    }
+
+    public fn migrate(self, target_version: int, migrate_fn) -> bool {
+        let cur = self.schema_version();
+        if cur >= target_version {
+            return false;
+        }
+        let next = migrate_fn(cur, U.deep_copy(self.data));
+        if next != null and type_of(next) == "map" {
+            self.data = U.deep_copy(next);
+        }
+        self.schema_ver = target_version;
+        self.data["__schema_version"] = target_version;
+        self.ver += 1;
+        self.dirty = true;
+        return true;
+    }
+
+    public fn is_dirty(self) -> bool {
+        return self.dirty == true;
+    }
+
+    public fn flush(self) -> bool {
+        self.dirty = false;
+        return true;
+    }
+
+    public fn batch(self, fn_block) -> bool {
+        let snap_data = U.deep_copy(self.data);
+        let snap_ver = int(self.ver);
+        let snap_dirty = self.dirty == true;
+        let snap_schema = int(self.schema_ver);
+        let err_thrown = null;
+        try {
+            fn_block();
+        } catch (e) {
+            err_thrown = e;
+        }
+        if err_thrown != null {
+            self.data = snap_data;
+            self.ver = snap_ver;
+            self.dirty = snap_dirty;
+            self.schema_ver = snap_schema;
+            throw err_thrown;
+        }
+        return self.flush();
+    }
+
+    public fn get(self, k: string, dflt) -> any {
+        if self.data.has(k) {
+            return U.deep_copy(self.data[k]);
+        }
+        return dflt;
+    }
+
+    public fn set(self, k: string, v) {
+        self.data[k] = U.deep_copy(v);
+        self.ver += 1;
+        self.dirty = true;
+    }
+
+    public fn remove(self, k: string) {
+        if self.data.has(k) {
+            let next = {
+            };
+            for (ck, cv) in self.data {
+                if string(ck) != k {
+                    next[ck] = cv;
+                }
+            }
+            self.data = next;
+            self.ver += 1;
+            self.dirty = true;
+        }
+    }
+
+    public fn all(self) -> map {
+        return U.deep_copy(self.data);
+    }
+
+    public fn version(self) -> int {
+        return int(self.ver);
+    }
+
+    public fn reset(self) {
+        self.data = {
+        };
+        self.ver += 1;
+        self.dirty = false;
+        self.schema_ver = 0;
+    }
+}
+
+/// Per-instance file-backed Store with backup, schema migration, batching & corruption protection (A-26/A-44).
+public class FileStore implements Store {
+    private let dir;
+    private let data;
+    private let ver;
+    private let corrupt;
+    private let last_error;
+    private let dirty;
+    private let auto_flush;
+    private let saves;
+    private let schema_ver;
+
+    fn new (dir_path: string) {
+        self.dir = dir_path;
+        self.data = {
+        };
+        self.ver = 0;
+        self.corrupt = false;
+        self.last_error = "";
+        self.dirty = false;
+        self.auto_flush = true;
+        self.saves = 0;
+        self.schema_ver = 0;
+        let mk = dir_create(dir_path);
+        if mk.is_err() {
+            self.last_error = string(mk.unwrap_err());
+        }
+        self.load();
+    }
+
+    public fn schema_version(self) -> int {
+        if self.data.has("__schema_version") {
+            return U.ival(self.data, "__schema_version", int(self.schema_ver));
+        }
+        return int(self.schema_ver);
+    }
+
+    public fn migrate(self, target_version: int, migrate_fn) -> bool {
+        if self.corrupt {
+            if not string(self.last_error).starts_with("refusing to overwrite corrupt storage file") {
+                self.last_error = "refusing to overwrite corrupt storage file until reset(): " + string(
+                    self.last_error
+                );
+            }
+            return false;
+        }
+        let cur = self.schema_version();
+        if cur >= target_version {
+            return false;
+        }
+        let snap_data = U.deep_copy(self.data);
+        let snap_schema = int(self.schema_ver);
+        let snap_ver = int(self.ver);
+        let snap_dirty = self.dirty == true;
+        let next = migrate_fn(cur, U.deep_copy(self.data));
+        if next != null and type_of(next) == "map" {
+            self.data = U.deep_copy(next);
+        }
+        self.schema_ver = target_version;
+        self.data["__schema_version"] = target_version;
+        self.ver += 1;
+        self.dirty = true;
+        if self.auto_flush == true {
+            let ok = self.flush();
+            if not ok {
+                self.data = snap_data;
+                self.schema_ver = snap_schema;
+                self.ver = snap_ver;
+                self.dirty = snap_dirty;
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public fn is_dirty(self) -> bool {
+        return self.dirty == true;
+    }
+
+    public fn save_count(self) -> int {
+        return int(self.saves);
+    }
+
+    public fn set_auto_flush(self, flag: bool) {
+        self.auto_flush = flag;
+    }
+
+    public fn flush(self) -> bool {
+        if self.dirty != true {
+            return true;
+        }
+        let ok = self.save();
+        if ok {
+            self.dirty = false;
+        }
+        return ok;
+    }
+
+    public fn batch(self, fn_block) -> bool {
+        let prev = self.auto_flush == true;
+        let snap_data = U.deep_copy(self.data);
+        let snap_schema = int(self.schema_ver);
+        let snap_ver = int(self.ver);
+        let snap_dirty = self.dirty == true;
+        self.auto_flush = false;
+        let err_thrown = null;
+        try {
+            fn_block();
+        } catch (e) {
+            err_thrown = e;
+        }
+        self.auto_flush = prev;
+        if err_thrown != null {
+            self.data = snap_data;
+            self.schema_ver = snap_schema;
+            self.ver = snap_ver;
+            self.dirty = snap_dirty;
+            throw err_thrown;
+        }
+        if prev {
+            return self.flush();
+        }
+        return true;
+    }
+
+    private fn kv_path(self) -> string {
+        return string(self.dir) + "/kv.json";
+    }
+
+    private fn bak_path(self) -> string {
+        return string(self.dir) + "/kv.json.bak";
+    }
+
+    public fn last_err(self) -> string {
+        return string(self.last_error);
+    }
+
+    public fn load(self) {
+        self.data = {
+        };
+        self.corrupt = false;
+        self.dirty = false;
+        self.schema_ver = 0;
+        let r = read_file(self.kv_path());
+        if r.is_ok() {
+            let t = string(r.unwrap()).trim();
+            if t != "" {
+                try {
+                    let parsed = json_parse(t);
+                    if type_of(parsed) == "map" {
+                        self.data = parsed;
+                        if self.data.has("__schema_version") {
+                            self.schema_ver = U.ival(self.data, "__schema_version", 0);
+                        }
+                        self.last_error = "";
+                    } else {
+                        self.corrupt = true;
+                        self.last_error = "storage root is not a map";
+                    }
+                } catch (e) {
+                    self.corrupt = true;
+                    self.last_error = string(e);
+                }
+            }
+        }
+    }
+
+    public fn save(self) -> bool {
+        if self.corrupt {
+            if not string(self.last_error).starts_with("refusing to overwrite corrupt storage file") {
+                self.last_error = "refusing to overwrite corrupt storage file until reset(): " + string(
+                    self.last_error
+                );
+            }
+            return false;
+        }
+        if not is_dir(string(self.dir)) {
+            let mk = dir_create(string(self.dir));
+            if mk.is_err() {
+                self.last_error = string(mk.unwrap_err());
+            }
+        }
+        let payload = json_write(self.data);
+        if file_exists(self.kv_path()) {
+            let _bk = copy_file(self.kv_path(), self.bak_path());
+        }
+        let tmp = self.kv_path() + ".tmp";
+        let wr = write_file(tmp, payload);
+        if wr.is_err() {
+            self.last_error = string(wr.unwrap_err());
+            return false;
+        }
+        let rn = rename(tmp, self.kv_path());
+        if rn.is_err() {
+            let wr2 = write_file(self.kv_path(), payload);
+            let _rm = remove_file(tmp);
+            if wr2.is_err() {
+                self.last_error = string(wr2.unwrap_err());
+                return false;
+            }
+        }
+        self.saves = int(self.saves) + 1;
+        self.dirty = false;
+        self.last_error = "";
+        return true;
+    }
+
+    public fn get(self, k: string, dflt) -> any {
+        if self.data.has(k) {
+            return U.deep_copy(self.data[k]);
+        }
+        return dflt;
+    }
+
+    public fn set(self, k: string, v) {
+        self.data[k] = U.deep_copy(v);
+        self.ver += 1;
+        self.dirty = true;
+        if self.auto_flush == true {
+            self.flush();
+        }
+    }
+
+    public fn remove(self, k: string) {
+        if self.data.has(k) {
+            let next = {
+            };
+            for (ck, cv) in self.data {
+                if string(ck) != k {
+                    next[ck] = cv;
+                }
+            }
+            self.data = next;
+            self.ver += 1;
+            self.dirty = true;
+        }
+        if self.auto_flush == true and self.dirty == true {
+            self.flush();
+        }
+    }
+
+    public fn all(self) -> map {
+        return U.deep_copy(self.data);
+    }
+
+    public fn version(self) -> int {
+        return int(self.ver);
+    }
+
+    public fn reset(self) {
+        self.data = {
+        };
+        self.corrupt = false;
+        self.last_error = "";
+        self.dirty = false;
+        self.schema_ver = 0;
+        self.ver += 1;
+    }
+}
+
+/// Lightweight dependency-injection container supporting singleton and transient bindings.
+public class Container {
+    private let bindings;
+    private let singletons;
+
+    fn new () {
+        self.bindings = {
+        };
+        self.singletons = {
+        };
+    }
+
+    public fn bind(self, name: string, factory, scope: string = "singleton") -> Container {
+        self.bindings[name] = {
+            "factory": factory, "scope": scope
+        };
+        if self.singletons.has(name) {
+            let next = {
+            };
+            for (k, v) in self.singletons {
+                if string(k) != name {
+                    next[k] = v;
+                }
+            }
+            self.singletons = next;
+        }
+        return self;
+    }
+
+    public fn has(self, name: string) -> bool {
+        return self.bindings.has(name);
+    }
+
+    public fn resolve(self, name: string) {
+        if self.singletons.has(name) {
+            return self.singletons[name];
+        }
+        if not self.bindings.has(name) {
+            throw errors.make("E_UNBOUND_DEP", "unbound dependency: " + name).format();
+        }
+        let b = self.bindings[name];
+        let fac = b["factory"];
+        let inst = fac(self);
+        if string(b["scope"]) == "singleton" {
+            self.singletons[name] = inst;
+        }
+        return inst;
+    }
+}

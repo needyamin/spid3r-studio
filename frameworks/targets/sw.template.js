@@ -17,6 +17,11 @@ self.addEventListener('install', function(ev) {
       return cache.addAll(PRECACHE_URLS);
     }).then(function() {
       return self.skipWaiting();
+    }).catch(function(err) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[AppStudio SW] precache failed:', err);
+      }
+      throw err;
     })
   );
 });

@@ -9,11 +9,20 @@ import "Util" as U;
 let named = {
 };  // handler name (as passed to App.handler) -> fn(ev)
 let slots = {
-};  // "f<n>" -> fn(ev); closure slots, rebuilt on every render
+};  // "f_<nonce>_<epoch>_<n>" -> fn(ev); closure slots, rebuilt on every render
 let slot_seq = 0;
+let slot_nonce = "";
+let slot_epoch = 1;
+let nonce_gen_seq = 0;
 let pending_effects = [];
 let host_caps = {
-    "platform": "native", "prefers_dark": false, "viewport_width": 0
+    "platform": "native",
+    "prefers_dark": false,
+    "viewport_width": 0,
+    "capabilities": {
+        "clipboard": true, "open_url": true, "haptic": true, "secure_store": true, "files": true, "share": true, "auth": true, "deep_link": true
+    }
+    ,
 };
 
 // GUI bridge natives (gui_title, gui_set_html, gui_eval, gui_on, gui_emit) only
@@ -73,24 +82,100 @@ public fn emit(name: string, payload: string) {
 
 // ---------- handler registry ----------
 
+fn fresh_nonce() -> string {
+    nonce_gen_seq += 1;
+    let ut = 0;
+    let nm = 0;
+    // Guard unix_time() behind native platform: std::time::SystemTime::now() panics in WASM (BUG-12).
+    if platform() == "native" {
+        try {
+            ut = unix_time();
+        } catch (_e) {
+            ut = 0;
+        }
+    }
+    try {
+        nm = now_ms();
+    } catch (_e2) {
+        nm = 0;
+    }
+    return U.fnv_hex(string(ut) + ":" + string(nm) + ":" + string(nonce_gen_seq));
+}
+
+fn ensure_nonce() -> string {
+    if slot_nonce == "" {
+        slot_nonce = fresh_nonce();
+    }
+    return slot_nonce;
+}
+
+/// Return the active per-session random slot prefix (A-13).
+public fn session_nonce() -> string {
+    return ensure_nonce();
+}
+
+/// Return the active per-frame slot epoch (A-13).
+public fn slot_epoch_id() -> int {
+    return slot_epoch;
+}
+
+/// Configure slot session nonce + frame epoch (used by wasm REPL host handshake).
+public fn set_slot_context(nonce: string, epoch: int) {
+    let clean = string(nonce).trim();
+    if clean != "" {
+        slot_nonce = clean;
+    } else {
+        ensure_nonce();
+    }
+    if epoch > 0 {
+        slot_epoch = epoch;
+    }
+}
+
 /// Register a named handler (referenced by string in components).
 public fn named_handler(name: string, h) {
     named[name] = h;
 }
 
-/// Register a closure handler for one render pass; returns its slot id.
+/// Register a closure handler for one render pass; returns an authenticated slot id (A-13).
 public fn slot(h) -> string {
     slot_seq += 1;
-    let id = "f" + string(slot_seq);
+    let id = "f_" + ensure_nonce() + "_" + string(slot_epoch) + "_" + string(slot_seq);
     slots[id] = h;
     return id;
 }
 
-/// Drop closure slots (call at the start of every render).
+/// Drop closure slots and advance frame epoch (call at the start of every render).
 public fn clear_slots() {
     slots = {
     };
     slot_seq = 0;
+    slot_epoch += 1;
+}
+
+/// Drop closure slots without advancing the frame epoch (used for same-frame error fallback).
+public fn clear_slots_keep_epoch() {
+    slots = {
+    };
+    slot_seq = 0;
+}
+
+/// Validate inbound UI event payload shape (A-13).
+public fn is_valid_event(p) -> bool {
+    if p == null or type_of(p) != "map" {
+        return false;
+    }
+    if not p.has("sid") or type_of(p["sid"]) != "string" {
+        return false;
+    }
+    let sid = string(p["sid"]);
+    if sid == "" or sid.len() > 128 {
+        return false;
+    }
+    if p.has("kind") and p["kind"] != null and type_of(p["kind"]) != "string" {
+        return false;
+    }
+    return true;
 }
 
 /// Normalize an inbound event payload: may be a map, a JSON string, or an
@@ -129,19 +214,23 @@ public fn normalize(data) -> map ? {
     return p;
 }
 
-/// Route an event payload to its handler. Missing handlers are ignored.
+/// Route an event payload (plus any same-frame flushed inputs) to its handler(s).
 public fn dispatch(data) {
     let p = normalize(data);
-    if p == null {
+    if not is_valid_event(p) {
         return;
     }
-    if not p.has("sid") {
-        return;
+    if p.has("flushed") and type_of(p["flushed"]) == "list" {
+        for fev in p["flushed"] {
+            if is_valid_event(fev) {
+                let fh = lookup(string(fev["sid"]));
+                if fh != null {
+                    fh(fev);
+                }
+            }
+        }
     }
     let sid = string(p["sid"]);
-    if sid == "" {
-        return;
-    }
     let h = lookup(sid);
     if h == null {
         return;
@@ -172,9 +261,17 @@ public fn reset() {
     slots = {
     };
     slot_seq = 0;
+    slot_nonce = "";
+    slot_epoch = 1;
     pending_effects = [];
     host_caps = {
-        "platform": "native", "prefers_dark": false, "viewport_width": 0
+        "platform": "native",
+        "prefers_dark": false,
+        "viewport_width": 0,
+        "capabilities": {
+            "clipboard": true, "open_url": true, "haptic": true, "secure_store": true, "files": true, "share": true, "auth": true, "deep_link": true
+        }
+        ,
     };
 }
 
@@ -208,16 +305,39 @@ public fn set_host_caps(c: map) {
     if c.has("viewport_width") and c["viewport_width"] != null {
         host_caps["viewport_width"] = U.ival(c, "viewport_width", 0);
     }
+    if c.has("capabilities") and type_of(c["capabilities"]) == "map" {
+        let merged = {
+        };
+        if host_caps.has("capabilities") and type_of(host_caps["capabilities"]) == "map" {
+            for (ek, ev) in host_caps["capabilities"] {
+                merged[ek] = ev;
+            }
+        }
+        for (nk, nv) in c["capabilities"] {
+            merged[string(nk)] = nv == true;
+        }
+        host_caps["capabilities"] = merged;
+    }
+}
+
+/// Check whether a named native/host capability is supported (A-05).
+public fn has_cap(name: string) -> bool {
+    let k = name.trim().lower();
+    if k == "" {
+        return false;
+    }
+    if host_caps.has("capabilities") and type_of(host_caps["capabilities"]) == "map" {
+        let caps_m = host_caps["capabilities"];
+        if caps_m.has(k) {
+            return caps_m[k] == true;
+        }
+    }
+    return false;
 }
 
 /// Return a shallow copy of current host capability metadata.
 public fn caps() -> map {
-    let out = {
-    };
-    for (k, v) in host_caps {
-        out[k] = v;
-    }
-    return out;
+    return U.deep_copy(host_caps);
 }
 
 /// Current host platform identifier ("native", "web", "android", "ios").
@@ -271,16 +391,229 @@ public fn haptic(style: string = "light") {
     });
 }
 
-/// Normalize, dispatch, and return "" on success or formatted error on failure.
+fn is_safe_sec_key(k: string) -> bool {
+    let s = k.trim();
+    if s == "" or s.len() > 128 {
+        return false;
+    }
+    let i = 0;
+    while i < s.len() {
+        let c = s[i];
+        let ok = (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "_" or c == "-" or c == "." or c == ":";
+        if not ok {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+/// Store a secret in platform encrypted storage (Keychain / Android Keystore / WebCrypto AES-GCM) (A-04).
+public fn secure_set(key: string, value: string, cb: string = "") -> bool {
+    if not is_safe_sec_key(key) {
+        return false;
+    }
+    enqueue_effect({
+        "kind": "secure_store.set",
+        "key": key.trim(),
+        "value": value,
+        "cb": cb.trim(),
+    });
+    return true;
+}
+
+/// Read a secret from platform encrypted storage; result delivered to named handler cb (A-04).
+public fn secure_get(key: string, cb: string) -> bool {
+    if not is_safe_sec_key(key) or cb.trim() == "" {
+        return false;
+    }
+    enqueue_effect({
+        "kind": "secure_store.get",
+        "key": key.trim(),
+        "cb": cb.trim(),
+    });
+    return true;
+}
+
+/// Delete a secret from platform encrypted storage (A-04).
+public fn secure_remove(key: string, cb: string = "") -> bool {
+    if not is_safe_sec_key(key) {
+        return false;
+    }
+    enqueue_effect({
+        "kind": "secure_store.remove",
+        "key": key.trim(),
+        "cb": cb.trim(),
+    });
+    return true;
+}
+
+/// Invoke host native share sheet (UIActivityViewController / Android Intent.ACTION_SEND / Web Share) (A-05).
+public fn share(title: string, text: string, url: string = "") -> bool {
+    let clean_url = url.trim();
+    if clean_url != "" and not is_safe_open_url(clean_url) {
+        return false;
+    }
+    enqueue_effect({
+        "kind": "share",
+        "title": title,
+        "text": text,
+        "url": clean_url,
+    });
+    return true;
+}
+
+/// Request host file picker; selected file metadata/content delivered to named handler cb (A-05).
+public fn pick_file(accept: string, cb: string) -> bool {
+    if cb.trim() == "" {
+        return false;
+    }
+    let acc = accept.trim();
+    if acc == "" {
+        acc = "*/*";
+    }
+    enqueue_effect({
+        "kind": "files.pick",
+        "accept": acc,
+        "cb": cb.trim(),
+    });
+    return true;
+}
+
+fn is_safe_url_scheme(scheme: string) -> bool {
+    let s = scheme.trim().lower();
+    if s == "" or s.len() > 40 {
+        return false;
+    }
+    if s == "http" or s == "https" or s == "javascript" or s == "data" or s == "file" or s == "vbscript" {
+        return false;
+    }
+    let c0 = s[0];
+    if not (c0 >= "a" and c0 <= "z") {
+        return false;
+    }
+    let i = 1;
+    while i < s.len() {
+        let c = s[i];
+        let ok = (c >= "a" and c <= "z") or (c >= "0" and c <= "9") or c == "+" or c == "-" or c == ".";
+        if not ok {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+/// Launch external HTTPS OAuth/SSO flow expecting a redirect back on redirect_scheme (A-53).
+public fn start_auth(url: string, redirect_scheme: string, cb: string) -> bool {
+    let u = url.trim();
+    if not u.lower().starts_with("https://") or U.safe_url(u) == "" {
+        return false;
+    }
+    if not is_safe_url_scheme(redirect_scheme) or cb.trim() == "" {
+        return false;
+    }
+    enqueue_effect({
+        "kind": "auth.open",
+        "url": u,
+        "redirect_scheme": redirect_scheme.trim().lower(),
+        "cb": cb.trim(),
+    });
+    return true;
+}
+
+/// Register the application deep-link / auth redirect callback handler (A-53).
+public fn on_deep_link(cb) {
+    if cb != null {
+        named_handler("__studio_deep_link__", cb);
+    }
+}
+
+/// Parse an inbound deep-link URL into {url, scheme, host, path, query} (A-53).
+/// Returns an empty map for unsafe/malformed URLs.
+public fn parse_deep_link(raw_url: string) -> map {
+    let u = raw_url.trim();
+    if u == "" {
+        return {
+        };
+    }
+    let colon = u.index_of("://");
+    if colon <= 0 {
+        return {
+        };
+    }
+    let scheme = u.slice(0, colon).lower();
+    if scheme == "javascript" or scheme == "data" or scheme == "vbscript" or scheme == "file" {
+        return {
+        };
+    }
+    let rest = u.slice(colon + 3, u.len());
+    let frag = rest.index_of("#");
+    if frag >= 0 {
+        rest = rest.slice(0, frag);
+    }
+    let query_str = "";
+    let qpos = rest.index_of("?");
+    if qpos >= 0 {
+        query_str = rest.slice(qpos + 1, rest.len());
+        rest = rest.slice(0, qpos);
+    }
+    let host = rest;
+    let path = "";
+    let slash = rest.index_of("/");
+    if slash >= 0 {
+        host = rest.slice(0, slash);
+        path = rest.slice(slash, rest.len());
+    }
+    let query = {
+    };
+    if query_str != "" {
+        for pair in query_str.split("&") {
+            let p = string(pair);
+            if p == "" {
+                continue;
+            }
+            let eq = p.index_of("=");
+            if eq >= 0 {
+                let k = p.slice(0, eq);
+                let v = p.slice(eq + 1, p.len());
+                query[k] = v;
+            } else {
+                query[p] = "";
+            }
+        }
+    }
+    return {
+        "url": u,
+        "scheme": scheme,
+        "host": host,
+        "path": path,
+        "query": query,
+    };
+}
+
+/// Normalize, dispatch (including same-frame flushed inputs), and return "" on success or formatted error.
 public fn dispatch_safe(data) -> string {
     let p = normalize(data);
-    if p == null or not p.has("sid") {
+    if not is_valid_event(p) {
         return "";
+    }
+    if p.has("flushed") and type_of(p["flushed"]) == "list" {
+        for fev in p["flushed"] {
+            if is_valid_event(fev) {
+                let fsid = string(fev["sid"]);
+                let fh = lookup(fsid);
+                if fh != null {
+                    try {
+                        fh(fev);
+                    } catch (fe) {
+                        return fsid + ": " + string(fe);
+                    }
+                }
+            }
+        }
     }
     let sid = string(p["sid"]);
-    if sid == "" {
-        return "";
-    }
     let h = lookup(sid);
     if h != null {
         try {
@@ -295,24 +628,12 @@ public fn dispatch_safe(data) -> string {
 /// Dispatch + re-render: the single subscription installed by App.run.
 /// After any handler mutates state/navigation, the visible page re-renders.
 public fn dispatch_and_render(data, app) {
-    let p = normalize(data);
-    if p == null {
+    let err = dispatch_safe(data);
+    if err != "" {
+        set_html(
+            "<div class=\"page\"><div class=\"card\"><div class=\"title\" style=\"color:var(--danger)\">Handler error</div><div class=\"mono\">" + U.esc(err) + "</div></div></div>"
+        );
         return;
-    }
-    if not p.has("sid") {
-        return;
-    }
-    let sid = string(p["sid"]);
-    let h = lookup(sid);
-    if h != null {
-        try {
-            h(p);
-        } catch (e) {
-            set_html(
-                "<div class=\"page\"><div class=\"card\"><div class=\"title\" style=\"color:var(--danger)\">Handler error</div><div class=\"mono\">" + U.esc(sid + ": " + string(e)) + "</div></div></div>"
-            );
-            return;
-        }
     }
     try {
         app.render();

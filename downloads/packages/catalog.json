@@ -1,5 +1,5 @@
 {
-  "catalogVersion": "1.2.0",
+  "catalogVersion": "1.3.0",
   "directory": "downloads/",
   "packages": [
     {
@@ -7,6 +7,8 @@
       "name": "Spid3r WASM Runtime (spid3r.wasm + spid3r.js)",
       "category": "Core Runtime",
       "targetDir": "downloads/wasm-runtime/",
+      "checksumSidecar": "checksums.sha256",
+      "sha256ByVersion": {},
       "requiredFor": "Web, PWA, Android, iOS"
     },
     {
@@ -15,6 +17,11 @@
       "category": "iOS SDK",
       "targetDir": "downloads/xtool/1.24.0/",
       "url": "https://github.com/xtool-org/xtool/releases/download/1.24.0/xtool-x86_64.AppImage",
+      "sha256": "dbfd9d7216f077c84c171b688c4173c37c23ca76bf7fd185d1a9ae8a53dab59f",
+      "sha256ByArch": {
+        "x86_64": "dbfd9d7216f077c84c171b688c4173c37c23ca76bf7fd185d1a9ae8a53dab59f",
+        "aarch64": ""
+      },
       "requiredFor": "iOS .ipa Building & Codesigning"
     },
     {
@@ -23,6 +30,7 @@
       "category": "iOS SDK",
       "targetDir": "downloads/installers/",
       "url": "https://developer.apple.com/download/all/?q=Xcode",
+      "sha256": "",
       "requiredFor": "iOS arm64 SwiftPM Compilation"
     },
     {

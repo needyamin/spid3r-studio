@@ -58,6 +58,34 @@ fn check_single_file(p: string) -> bool {
     return true;
 }
 
+fn check_files(files: list) -> bool {
+    if files.len() == 0 {
+        return true;
+    }
+    let args = ["check", "--deny-warnings"];
+    for f in files {
+        args.push(string(f));
+    }
+    let r = exec_capture("spid3r", args, null);
+    if r.is_ok() {
+        let m = r.unwrap();
+        if int(m["code"]) == 0 {
+            return true;
+        }
+        let err_low = string(m["stderr"]).lower();
+        if not err_low.contains("unexpected argument") and not err_low.contains("usage:") {
+            ex.flush_child_output(m);
+            return false;
+        }
+    }
+    for f in files {
+        if not check_single_file(string(f)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 public fn cmd_test(rest: list) -> int {
     let root = fs.trim_slash(fs.fw_root());
     let filter = first_positional(rest);
@@ -89,10 +117,8 @@ public fn cmd_test(rest: list) -> int {
             }
         }
     }
-    for rf in root_files {
-        if not check_single_file(rf) {
-            return 1;
-        }
+    if not check_files(root_files) {
+        return 1;
     }
 
     fs.setup_import_path();
@@ -107,10 +133,8 @@ public fn cmd_test(rest: list) -> int {
         }
         import_files.push(f);
     }
-    for imf in import_files {
-        if not check_single_file(imf) {
-            return 1;
-        }
+    if not check_files(import_files) {
+        return 1;
     }
     println("  checked " + string(all_files.len()) + " files cleanly");
 

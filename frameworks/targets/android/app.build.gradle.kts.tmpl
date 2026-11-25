@@ -5,14 +5,42 @@ plugins {
 
 android {
     namespace = "{{PACKAGE_NAME}}"
-    compileSdk = {{ANDROID_TARGET_SDK}}
+    compileSdk = {{ANDROID_COMPILE_SDK}}
 
     defaultConfig {
-        applicationId = "{{BUNDLE_ID}}"
+        applicationId = "{{BUNDLE_ID_KOTLIN}}"
         minSdk = {{ANDROID_MIN_SDK}}
         targetSdk = {{ANDROID_TARGET_SDK}}
-        versionCode = {{VERSION_CODE}}
-        versionName = "{{APP_VERSION}}"
+        versionCode = (project.findProperty("versionCode")?.toString()?.toIntOrNull()
+            ?: System.getenv("STUDIO_VERSION_CODE")?.toIntOrNull()
+            ?: {{VERSION_CODE}})
+        versionName = "{{APP_VERSION_KOTLIN}}"
+    }
+
+    val keystorePath = System.getenv("STUDIO_ANDROID_KEYSTORE") ?: ""
+    signingConfigs {
+        if (keystorePath.isNotBlank()) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("STUDIO_ANDROID_KEYSTORE_PASSWORD") ?: ""
+                keyAlias = System.getenv("STUDIO_ANDROID_KEY_ALIAS") ?: ""
+                keyPassword = System.getenv("STUDIO_ANDROID_KEY_PASSWORD") ?: ""
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            if (keystorePath.isNotBlank()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 
     compileOptions {

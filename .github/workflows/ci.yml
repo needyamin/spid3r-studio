@@ -1,0 +1,138 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Spid3r v1.1.1
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/needyamin/spid3r/main/install.sh | sh
+          echo "$HOME/.spid3r/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Guard — verify spid3r binary is on PATH
+        run: |
+          command -v spid3r >/dev/null 2>&1 || { echo "spid3r not on PATH — gate did not run"; exit 1; }
+          spid3r --version
+
+      - name: Canary — assert static gate fails on a broken fixture
+        run: |
+          TMP_BAD=$(mktemp --suffix=.matrix)
+          printf 'fn bad(unused_param: int) -> int { return 1; }\n' > "$TMP_BAD"
+          if spid3r check --deny-warnings "$TMP_BAD" >/dev/null 2>&1; then
+            rm -f "$TMP_BAD"
+            echo "ERROR: canary passed when spid3r check --deny-warnings was expected to fail"
+            exit 1
+          fi
+          rm -f "$TMP_BAD"
+          echo "canary ok: static gate rejects warnings as errors"
+
+      - name: Format check, strict static checks, and all test suites
+        run: |
+          unset SPID3R_PATH
+          spid3r run studio.matrix test
+
+      - name: Client JS & wasmhost test suite (A-22)
+        run: |
+          node --version
+          node --test core/tests/client_js.test.mjs
+
+  build-matrix:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [web, android, ios]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Spid3r v1.1.1
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/needyamin/spid3r/main/install.sh | sh
+          echo "$HOME/.spid3r/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Guard — verify spid3r binary is on PATH
+        run: |
+          command -v spid3r >/dev/null 2>&1 || { echo "spid3r not on PATH — gate did not run"; exit 1; }
+
+      - name: Build workspace/demo for ${{ matrix.target }}
+        run: |
+          unset SPID3R_PATH
+          spid3r run studio.matrix build workspace/demo --target "${{ matrix.target }}"
+          case "${{ matrix.target }}" in
+            web)
+              test -s workspace/demo/build/web/index.html
+              test -s workspace/demo/build/web/app.matrix
+              test -s workspace/demo/build/web/manifest.json
+              test -s workspace/demo/build/web/sw.js
+              ;;
+            android)
+              test -s workspace/demo/build/android/AndroidApp/app/build.gradle.kts
+              test -s workspace/demo/build/android/AndroidApp/app/src/main/assets/app.matrix
+              test -s workspace/demo/build/android/AndroidApp/app/src/main/res/xml/network_security_config.xml
+              test -s workspace/demo/build/android/AndroidApp/gradlew
+              test -s workspace/demo/build/android/AndroidApp/gradle/wrapper/gradle-wrapper.properties
+              ;;
+            ios)
+              test -s workspace/demo/build/ios/StudioDemo/Package.swift
+              test -s workspace/demo/build/ios/StudioDemo/Info.plist
+              test -s workspace/demo/build/ios/StudioDemo/Entitlements.plist
+              test -s workspace/demo/build/ios/StudioDemo/xtool.yml
+              test -s workspace/demo/build/ios/StudioDemo/sbom.json
+              test -s workspace/demo/build/ios/StudioDemo/Assets.xcassets/AppIcon.appiconset/Contents.json
+              test -s workspace/demo/build/ios/StudioDemo/Sources/StudioDemo/Resources/app/app.matrix
+              ;;
+          esac
+
+  release:
+    needs: [check, build-matrix]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [web, android, ios]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Spid3r v1.1.1
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/needyamin/spid3r/main/install.sh | sh
+          echo "$HOME/.spid3r/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build release package for ${{ matrix.target }}
+        run: |
+          unset SPID3R_PATH
+          spid3r run studio.matrix build workspace/demo --target "${{ matrix.target }}" --release
+          case "${{ matrix.target }}" in
+            web)
+              test -s workspace/demo/build/web/index.html
+              test -s workspace/demo/build/web/sbom.json
+              test ! -e workspace/demo/build/web/app.matrix.map.json
+              ;;
+            android)
+              test -s workspace/demo/build/android/AndroidApp/app/proguard-rules.pro
+              test -s workspace/demo/build/android/AndroidApp/sbom.json
+              ;;
+            ios)
+              test -s workspace/demo/build/ios/StudioDemo/Entitlements.plist
+              test -s workspace/demo/build/ios/StudioDemo/sbom.json
+              ;;
+          esac
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: appstudio-demo-${{ matrix.target }}-release
+          path: workspace/demo/build/${{ matrix.target }}
+          if-no-files-found: error

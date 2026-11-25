@@ -18,7 +18,7 @@ import "core/cli/BuildDesktop" as b_desk;
 import "core/cli/BuildAndroid" as b_and;
 import "core/cli/BuildIos" as b_ios;
 
-fn cmd_build(appdir: string, target: string, outdir: string) -> int {
+fn cmd_build(appdir: string, target: string, outdir: string, release: bool = false) -> int {
     let entry = man.find_entry(appdir);
     if entry == "" {
         println("error: no app entry found in " + appdir);
@@ -37,7 +37,7 @@ fn cmd_build(appdir: string, target: string, outdir: string) -> int {
     fs.ensure_dir(out);
 
     if t == "desktop" {
-        return b_desk.build(appdir, entry, out + "/desktop");
+        return b_desk.build(appdir, entry, out + "/desktop", release);
     }
     if t != "web" and t != "wasm" and t != "android" and t != "ios" {
         println("error: unknown target '" + t + "' (web | android | ios | desktop)");
@@ -46,18 +46,28 @@ fn cmd_build(appdir: string, target: string, outdir: string) -> int {
 
     let flat = flatkit.bundle(appdir);
     if flat == "" {
-        println("error: flattening the app failed (is studio/ complete?)");
+        let ferr = flatkit.last_error();
+        if ferr != "" {
+            println("error: flattening the app failed: " + ferr);
+        } else {
+            println("error: flattening the app failed (is studio/ complete?)");
+        }
         return 1;
     }
+    let lmap = flatkit.line_map();
     let cjs = clientjs.runtime_js();
 
     if t == "web" or t == "wasm" {
-        return b_web.build(appdir, out + "/web", flat, cjs);
+        let rc = b_web.build(appdir, out + "/web", flat, cjs, release);
+        if rc == 0 and not release {
+            let _lm = b_web.emit_line_map(out + "/web", lmap);
+        }
+        return rc;
     }
     if t == "android" {
-        return b_and.build(appdir, out + "/android", flat, cjs);
+        return b_and.build(appdir, out + "/android", flat, cjs, release);
     }
-    return b_ios.build(appdir, out + "/ios", flat, cjs);
+    return b_ios.build(appdir, out + "/ios", flat, cjs, release);
 }
 
 fn main() -> int {
@@ -193,7 +203,8 @@ fn main() -> int {
         return cmd_build(
             string(rest[0]),
             args_cli.arg_value(rest, "--target"),
-            args_cli.arg_value(rest, "-o")
+            args_cli.arg_value(rest, "-o"),
+            args_cli.has_flag(rest, "--release")
         );
     }
     println("error: unknown command '" + cmd + "'");

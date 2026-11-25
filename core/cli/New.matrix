@@ -75,14 +75,10 @@ public fn cmd_new(name: string, outdir: string) -> int {
         "BUNDLE_ID": bundle_id,
         "APP_DIR": dir,
     };
-    let t_toml = fs.render_template("templates/starter/spider.toml.tmpl", vars);
     let t_app = fs.render_template("templates/starter/app.matrix.tmpl", vars);
     let t_main = fs.render_template("templates/starter/main.matrix.tmpl", vars);
     let t_readme = fs.render_template("templates/starter/README.md.tmpl", vars);
-    if t_toml == "" or t_app == "" or t_main == "" or t_readme == "" {
-        return 1;
-    }
-    if not fs.write_checked(dir + "/spider.toml", t_toml) {
+    if t_app == "" or t_main == "" or t_readme == "" {
         return 1;
     }
     if not fs.write_checked(dir + "/app.matrix", t_app) {

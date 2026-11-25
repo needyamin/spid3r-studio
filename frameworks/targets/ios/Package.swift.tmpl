@@ -9,6 +9,8 @@ let package = Package(
         .iOS(.v{{IOS_DEPLOYMENT_TARGET}}),
     ],
     products: [
+        // xtool 1.24+ requires exactly one .library product representing the main iOS app
+        // and synthesizes the executable app target around the @main SwiftUI entry point.
         .library(
             name: "{{SWIFT_NAME}}",
             targets: ["{{SWIFT_NAME}}"]

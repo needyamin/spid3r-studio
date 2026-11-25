@@ -6,6 +6,26 @@ import "tools/FlatKit" as flatkit;
 
 let passed = 0;
 let failed = 0;
+let tmp_root = "";
+
+fn os_temp_base() -> string {
+    for k in ["TMPDIR", "TEMP", "TMP"] {
+        let ev = env(k);
+        if string(ev) != "none" {
+            let p = string(ev.unwrap()).replace("\\", "/");
+            while p.len() > 1 and p.ends_with("/") {
+                p = p.slice(0, p.len() - 1);
+            }
+            if p != "" and is_dir(p) {
+                return p;
+            }
+        }
+    }
+    if is_dir("/tmp") {
+        return "/tmp";
+    }
+    return ".";
+}
 
 fn check_ok(cond: bool, name: string) {
     if cond {
@@ -17,7 +37,7 @@ fn check_ok(cond: bool, name: string) {
 }
 
 fn check_parses(src: string, tag: string) -> bool {
-    let tmp = "_test_flatkit_tmp/check_" + tag + ".matrix";
+    let tmp = tmp_root + "/check_" + tag + ".matrix";
     if write_file(tmp, src).is_err() {
         return false;
     }
@@ -28,8 +48,69 @@ fn check_parses(src: string, tag: string) -> bool {
     return int(r.unwrap()["code"]) == 0;
 }
 
+fn check_strict(src: string, tag: string) -> bool {
+    let tmp = tmp_root + "/check_" + tag + ".matrix";
+    if write_file(tmp, src).is_err() {
+        return false;
+    }
+    let r = exec_capture("spid3r", ["check", "--deny-warnings", tmp], null);
+    if r.is_err() {
+        return false;
+    }
+    let m = r.unwrap();
+    if int(m["code"]) != 0 {
+        println(
+            "check_strict(" + tag + ") failed: " + string(m["stderr"]) + string(m["stdout"])
+        );
+        return false;
+    }
+    return true;
+}
+
+/// Execute a bundled flat source via `spid3r run` and return its rendered frame HTML (or "").
+fn run_bundle_html(flat: string, tag: string) -> string {
+    let tmp = tmp_root + "/run_" + tag + ".matrix";
+    if write_file(tmp, flat).is_err() {
+        return "";
+    }
+    let r = exec_capture("spid3r", ["run", tmp], null);
+    if r.is_err() {
+        return "";
+    }
+    let m = r.unwrap();
+    if int(m["code"]) != 0 {
+        println(
+            "run_bundle_html(" + tag + ") exit=" + string(m["code"]) + " err=" + string(m["stderr"])
+        );
+        return "";
+    }
+    let lines = string(m["stdout"]).split("\n");
+    let i = 0;
+    while i + 1 < lines.len() {
+        if string(lines[i]).trim() == "@@STUDIO_FRAME@@" {
+            try {
+                let parsed = json_parse(string(lines[i + 1]));
+                if type_of(parsed) == "map" and parsed.has("html") {
+                    return string(parsed["html"]);
+                }
+            } catch (_e) {
+                return "";
+            }
+        }
+        i += 1;
+    }
+    return "";
+}
+
+fn make_case_dir(base: string, name: string) -> string {
+    let d = base + "/" + name;
+    dir_create(d);
+    return d;
+}
+
 fn main() -> int {
-    let dir = "_test_flatkit_tmp";
+    tmp_root = os_temp_base() + "/appstudio_test_flatkit";
+    let dir = tmp_root;
     if is_dir(dir) {
         dir_remove(dir);
     }
@@ -137,8 +218,483 @@ public fn studio_app() {
 
     check_ok(check_parses(flat, "dag3"), "3-file flatkit bundle passes spid3r check");
 
-    let win_flat = flatkit.bundle("_test_flatkit_tmp");
-    check_ok(win_flat.contains("fn studio_app()"), "flatkit bundles local app path");
+    let win_flat = flatkit.bundle(dir);
+    check_ok(win_flat.contains("fn studio_app()"), "flatkit bundles isolated temp app path");
+
+    // ---------- Bundle Gate Executable Corpus (A-54, A-55, A-35, A-36, A-37, A-50, A-06, A-09) ----------
+
+    // 1. A-54 Form 1: (total) => total + 1 must return 6, not 1001
+    let d_a54_1 = make_case_dir(dir, "a54_paren");
+    write_file(
+        d_a54_1 + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+let total = 1000;
+fn Home() -> map {
+    let g = (total) => total + 1;
+    return ui.page([ui.text("RES=" + string(g(5)) + ":OUT=" + string(total))]);
+}
+public fn studio_app() { return appkit.App("A54a", "sh.t.a54a", "1.0.0").page("Home", Home); }
+"#
+    );
+    let f_a54_1 = flatkit.bundle(d_a54_1);
+    check_ok(
+        f_a54_1 != "" and check_strict(f_a54_1, "a54_1"),
+        "A-54 paren arrow passes --deny-warnings"
+    );
+    let h_a54_1 = run_bundle_html(f_a54_1, "a54_1");
+    check_ok(
+        h_a54_1.contains("RES=6:OUT=1000"),
+        "A-54 executed: (total) => total + 1 evaluates to 6, not 1001"
+    );
+
+    // 2. A-54 Form 2: map literal {"k": (total) => total + 1}
+    let d_a54_2 = make_case_dir(dir, "a54_map");
+    write_file(
+        d_a54_2 + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+let total = 1000;
+fn Home() -> map {
+    let m = {"k": (total) => total + 1, "g": total};
+    let f = m["k"];
+    return ui.page([ui.text("RES=" + string(f(5)) + ":G=" + string(m["g"]))]);
+}
+public fn studio_app() { return appkit.App("A54b", "sh.t.a54b", "1.0.0").page("Home", Home); }
+"#
+    );
+    let f_a54_2 = flatkit.bundle(d_a54_2);
+    check_ok(
+        f_a54_2 != "" and check_strict(f_a54_2, "a54_2"),
+        "A-54 map arrow passes --deny-warnings"
+    );
+    let h_a54_2 = run_bundle_html(f_a54_2, "a54_2");
+    check_ok(
+        h_a54_2.contains("RES=6:G=1000"),
+        "A-54 executed: map-literal arrow evaluates to 6 and sibling key sees global 1000"
+    );
+
+    // 3. A-54 Form 3: curried (total) => (total) => total + 1
+    let d_a54_3 = make_case_dir(dir, "a54_curried");
+    write_file(
+        d_a54_3 + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+let total = 1000;
+fn Home() -> map {
+    let g = (a) => (total) => a + total + 1;
+    return ui.page([ui.text("RES=" + string(g(10)(5)) + ":OUT=" + string(total))]);
+}
+public fn studio_app() { return appkit.App("A54c", "sh.t.a54c", "1.0.0").page("Home", Home); }
+"#
+    );
+    let f_a54_3 = flatkit.bundle(d_a54_3);
+    check_ok(
+        f_a54_3 != "" and check_strict(f_a54_3, "a54_3"),
+        "A-54 curried arrow passes --deny-warnings"
+    );
+    let h_a54_3 = run_bundle_html(f_a54_3, "a54_3");
+    check_ok(
+        h_a54_3.contains("RES=16:OUT=1000"),
+        "A-54 executed: curried brace-less arrow evaluates to 16"
+    );
+
+    // 4. A-54 Form 4: bare single-param total => total + 1 (at top-level AND inside fn)
+    let d_a54_4 = make_case_dir(dir, "a54_bare");
+    write_file(
+        d_a54_4 + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+let total = 1000;
+let top_fn = total => total + 2;
+fn Home() -> map {
+    let g = total => total + 1;
+    return ui.page([ui.text("RES=" + string(g(5)) + ":TOP=" + string(top_fn(5)) + ":OUT=" + string(total))]);
+}
+public fn studio_app() { return appkit.App("A54d", "sh.t.a54d", "1.0.0").page("Home", Home); }
+"#
+    );
+    let f_a54_4 = flatkit.bundle(d_a54_4);
+    check_ok(
+        f_a54_4 != "" and check_strict(f_a54_4, "a54_4"),
+        "A-54 bare arrow passes --deny-warnings"
+    );
+    let h_a54_4 = run_bundle_html(f_a54_4, "a54_4");
+    check_ok(
+        h_a54_4.contains("RES=6:TOP=7:OUT=1000"),
+        "A-54 executed: bare arrow preserves both param and module global"
+    );
+
+    // 5. A-55 Directional leak arrangement: brace-less arrow BEFORE a later function referencing module global
+    let d_a55_before = make_case_dir(dir, "a55_before");
+    write_file(
+        d_a55_before + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+let total = 1000;
+let g = (total) => total + 1;
+fn later_fn() -> int {
+    return total + 1;
+}
+fn Home() -> map {
+    return ui.page([ui.text("G=" + string(g(5)) + ":LATER=" + string(later_fn()))]);
+}
+public fn studio_app() { return appkit.App("A55b", "sh.t.a55b", "1.0.0").page("Home", Home); }
+"#
+    );
+    let f_a55_b = flatkit.bundle(d_a55_before);
+    check_ok(
+        f_a55_b != "" and check_strict(f_a55_b, "a55_before"),
+        "A-55 arrow-before passes --deny-warnings"
+    );
+    let h_a55_b = run_bundle_html(f_a55_b, "a55_before");
+    check_ok(
+        h_a55_b.contains("G=6:LATER=1001"),
+        "A-55 executed: arrow before function does not corrupt later function"
+    );
+
+    // 6. A-35 Module identity collision: pages/Home.matrix vs pages_Home.matrix
+    let d_a35 = make_case_dir(dir, "a35_col");
+    dir_create(d_a35 + "/pages");
+    write_file(
+        d_a35 + "/pages/Home.matrix",
+        "public fn label() -> string { return \"from_dir_home\"; }\n"
+    );
+    write_file(
+        d_a35 + "/pages_Home.matrix",
+        "public fn label() -> string { return \"from_flat_home\"; }\n"
+    );
+    write_file(
+        d_a35 + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+import "pages/Home" as dir_h;
+import "pages_Home" as flat_h;
+fn Home() -> map {
+    return ui.page([ui.text(dir_h.label() + "|" + flat_h.label())]);
+}
+public fn studio_app() { return appkit.App("A35", "sh.t.a35", "1.0.0").page("Home", Home); }
+"#
+    );
+    let f_a35 = flatkit.bundle(d_a35);
+    check_ok(
+        f_a35 != "" and check_strict(f_a35, "a35"),
+        "A-35 colliding module paths pass --deny-warnings"
+    );
+    let h_a35 = run_bundle_html(f_a35, "a35");
+    check_ok(
+        h_a35.contains("from_dir_home|from_flat_home"),
+        "A-35 executed: pages/Home and pages_Home are both distinct and reachable"
+    );
+
+    // 7. A-36 Multiple top-level `let _` across modules
+    let d_a36 = make_case_dir(dir, "a36_discard");
+    write_file(
+        d_a36 + "/helper.matrix",
+        "let _ = 1;\npublic fn val() -> int { return 42; }\n"
+    );
+    write_file(
+        d_a36 + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+import "helper" as h;
+let _ = 2;
+let _ = 3;
+fn Home() -> map {
+    return ui.page([ui.text("VAL=" + string(h.val()))]);
+}
+public fn studio_app() { return appkit.App("A36", "sh.t.a36", "1.0.0").page("Home", Home); }
+"#
+    );
+    let f_a36 = flatkit.bundle(d_a36);
+    check_ok(
+        f_a36 != "" and check_strict(f_a36, "a36"),
+        "A-36 multiple top-level let _ passes --deny-warnings"
+    );
+    let h_a36 = run_bundle_html(f_a36, "a36");
+    check_ok(h_a36.contains("VAL=42"), "A-36 executed: multiple top-level let _ runs cleanly");
+
+    // 8. A-37 Class field with same name as module global
+    let d_a37 = make_case_dir(dir, "a37_field");
+    write_file(
+        d_a37 + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+let count = 100;
+class Counter {
+    public let count;
+    fn new() { self.count = 7; }
+    public fn sum(self) -> int { return count + self.count; }
+}
+fn Home() -> map {
+    let c = Counter();
+    return ui.page([ui.text("SUM=" + string(c.sum()))]);
+}
+public fn studio_app() { return appkit.App("A37", "sh.t.a37", "1.0.0").page("Home", Home); }
+"#
+    );
+    let f_a37 = flatkit.bundle(d_a37);
+    check_ok(
+        f_a37 != "" and check_strict(f_a37, "a37"),
+        "A-37 class field shadowing passes --deny-warnings"
+    );
+    let h_a37 = run_bundle_html(f_a37, "a37");
+    check_ok(
+        h_a37.contains("SUM=107"),
+        "A-37 executed: class method reads both self.count (7) and module global count (100)"
+    );
+
+    // 9. A-50 Interfaces + implements (same-module and cross-module imported interface)
+    let d_a50 = make_case_dir(dir, "a50_iface");
+    dir_create(d_a50 + "/shapes");
+    write_file(
+        d_a50 + "/shapes/Shape.matrix",
+        "public interface Shape {\n    fn area(self) -> int;\n}\n"
+    );
+    write_file(
+        d_a50 + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+import "shapes/Shape" as sh;
+
+interface Labelled {
+    fn tag(self) -> string;
+}
+
+class Rect implements sh.Shape {
+    public let w;
+    public let h;
+    fn new(w: int, h: int) { self.w = w; self.h = h; }
+    public fn area(self) -> int { return self.w * self.h; }
+}
+
+class Badge implements Labelled {
+    public let lbl;
+    fn new(lbl: string) { self.lbl = lbl; }
+    public fn tag(self) -> string { return self.lbl; }
+}
+
+fn measure(s: sh.Shape) -> int {
+    return s.area();
+}
+
+fn Home() -> map {
+    let r = Rect(6, 7);
+    let b = Badge("ok-badge");
+    return ui.page([ui.text("AREA=" + string(measure(r)) + ":TAG=" + b.tag())]);
+}
+public fn studio_app() { return appkit.App("A50", "sh.t.a50", "1.0.0").page("Home", Home); }
+"#
+    );
+    let f_a50 = flatkit.bundle(d_a50);
+    check_ok(
+        f_a50 != "" and check_strict(f_a50, "a50"),
+        "A-50 interfaces & implements pass --deny-warnings"
+    );
+    let h_a50 = run_bundle_html(f_a50, "a50");
+    check_ok(
+        h_a50.contains("AREA=42:TAG=ok-badge"),
+        "A-50 executed: imported and local interfaces + implements work polymorphically"
+    );
+
+    // 10. A-06 Private cross-module symbol reference fails the build loudly
+    let d_a06 = make_case_dir(dir, "a06_priv");
+    write_file(
+        d_a06 + "/secret.matrix",
+        "fn hidden_fn() -> int { return 9; }\npublic fn open_fn() -> int { return 1; }\n"
+    );
+    write_file(
+        d_a06 + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+import "secret" as sec;
+fn Home() -> map {
+    return ui.page([ui.text(string(sec.hidden_fn()))]);
+}
+public fn studio_app() { return appkit.App("A06", "sh.t.a06", "1.0.0").page("Home", Home); }
+"#
+    );
+    let f_a06 = flatkit.bundle(d_a06);
+    check_ok(
+        f_a06 == "" and flatkit.last_error().contains("private symbol"),
+        "A-06 rejects cross-module private symbol access with descriptive error"
+    );
+
+    // 11. A-09 Missing entry reports descriptive filename in last_error()
+    let f_a09 = flatkit.bundle(dir + "/nonexistent_app_dir");
+    check_ok(
+        f_a09 == "" and flatkit.last_error().contains("app.matrix"),
+        "A-09 missing entry names expected entry file in last_error()"
+    );
+    let d_a09_m = make_case_dir(dir, "a09_manifest_missing");
+    write_file(d_a09_m + "/studio.json", "{\"name\":\"M\",\"entry\":\"custom_missing.matrix\"}");
+    let f_a09_m = flatkit.bundle(d_a09_m);
+    check_ok(
+        f_a09_m == "" and flatkit.last_error().contains("custom_missing.matrix"),
+        "A-09 missing studio.json entry names exact missing file"
+    );
+
+    // 12. A-54/A-55 Nested arrow inside `for` header must not erase loop-var shadowing
+    let d_for_ar = make_case_dir(dir, "for_arrow");
+    write_file(
+        d_for_ar + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+let total = 1000;
+fn map_xs(xs: list, f) -> list {
+    let out = [];
+    for v in xs { out.push(f(v)); }
+    return out;
+}
+fn Home() -> map {
+    let s1 = 0;
+    for total in map_xs([1, 2], (x) => x + 1) { s1 += total; }
+    let s2 = 0;
+    for total in map_xs([1, 2], x => x + 2) { s2 += total; }
+    let s3 = 0;
+    for total in map_xs([1, 2], (x) => { return x + 3; }) { s3 += total; }
+    return ui.page([ui.text("S1=" + string(s1) + ":S2=" + string(s2) + ":S3=" + string(s3) + ":G=" + string(total))]);
+}
+public fn studio_app() { return appkit.App("ForAr", "sh.t.forar", "1.0.0").page("Home", Home); }
+"#
+    );
+    let f_for_ar = flatkit.bundle(d_for_ar);
+    check_ok(
+        f_for_ar != "" and check_strict(f_for_ar, "for_ar"),
+        "for-header arrows (paren, bare, braced) pass --deny-warnings"
+    );
+    let h_for_ar = run_bundle_html(f_for_ar, "for_ar");
+    check_ok(
+        h_for_ar.contains("S1=5:S2=7:S3=9:G=1000"),
+        "executed: arrows inside for-header never erase loop-var shadowing"
+    );
+
+    // 13. Local `let x = x + 1` shadowing module global evaluates RHS against module global
+    let d_let_rhs = make_case_dir(dir, "let_rhs");
+    write_file(
+        d_let_rhs + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+let total = 100;
+fn Home() -> map {
+    let total = total + 1;
+    return ui.page([ui.text("VAL=" + string(total))]);
+}
+public fn studio_app() { return appkit.App("LetRhs", "sh.t.letrhs", "1.0.0").page("Home", Home); }
+"#
+    );
+    let f_let_rhs = flatkit.bundle(d_let_rhs);
+    check_ok(
+        f_let_rhs != "" and check_strict(f_let_rhs, "let_rhs"),
+        "local let shadowing global in its own RHS passes --deny-warnings"
+    );
+    let h_let_rhs = run_bundle_html(f_let_rhs, "let_rhs");
+    check_ok(
+        h_let_rhs.contains("VAL=101"),
+        "executed: local let total = total + 1 reads module global (101)"
+    );
+
+    // 14. A-51 FlatKit renames enum declarations and protects variants from colliding globals
+    let d_enum = make_case_dir(dir, "a51_enum");
+    write_file(
+        d_enum + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+let Red = 7;
+enum Color {
+    Red,
+    Green,
+}
+fn Home() -> map {
+    return ui.page([ui.text("R=" + string(Red))]);
+}
+public fn studio_app() { return appkit.App("EnumApp", "sh.t.enum", "1.0.0").page("Home", Home); }
+"#
+    );
+    let f_enum = flatkit.bundle(d_enum);
+    check_ok(
+        f_enum != "" and f_enum.contains("enum enum_u_app_Color") and not f_enum.contains("mod_u_app_Red,"),
+        "A-51 FlatKit renames enum type and preserves variant names against colliding globals"
+    );
+    check_ok(
+        check_strict(f_enum, "a51_enum"),
+        "A-51 bundled enum passes spid3r check --deny-warnings"
+    );
+
+    // 15. H2a OOP (studio/Store + studio/Errors + ui.component) bundles and executes cleanly
+    let d_h2a = make_case_dir(dir, "h2a_oop");
+    write_file(
+        d_h2a + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+import "studio/Store" as store_mod;
+import "studio/Errors" as errors;
+
+fn read_store(s: store_mod.Store, k: string) -> string {
+    return string(s.get(k, "none"));
+}
+
+fn CardComp(props: map) -> map {
+    return ui.text("COMP=" + string(props["label"]));
+}
+
+fn Home() -> map {
+    let ms = store_mod.MemoryStore();
+    ms.set("who", "alice");
+    let err = errors.make("E_DEMO", "oops", "test", true);
+    return ui.page([
+        ui.text("WHO=" + read_store(ms, "who") + ":ERR=" + err.format()),
+        ui.component("CardComp", {"label": "memo-ok"}, CardComp, "card-1"),
+    ]);
+}
+public fn studio_app() { return appkit.App("H2aApp", "sh.t.h2a", "1.0.0").page("Home", Home); }
+"#
+    );
+    let f_h2a = flatkit.bundle(d_h2a);
+    check_ok(
+        f_h2a != "" and check_strict(f_h2a, "h2a_oop"),
+        "H2a Store + Errors + ui.component bundle passes --deny-warnings"
+    );
+    let h_h2a = run_bundle_html(f_h2a, "h2a_oop");
+    check_ok(
+        h_h2a.contains("WHO=alice:ERR=[E_DEMO] oops (cause: test)") and h_h2a.contains("data-key=\"card-1\"") and h_h2a.contains("COMP=memo-ok"),
+        "H2a executed: MemoryStore implements Store, AppError formats, ui.component renders keyed output"
+    );
+
+    // 16. A-24 & A-29: FlatKit line_map / map_line + studio/I18n bundling
+    let d_lmap = make_case_dir(dir, "a24_lmap");
+    write_file(
+        d_lmap + "/app.matrix",
+        "import \"studio/App\" as appkit;\nimport \"studio/Components\" as ui;\nimport \"studio/I18n\" as i18n;\nfn Home() -> map {\n    i18n.set_locale(\"ar\");\n    return ui.page([ui.text(\"DIR=\" + i18n.dir())]);\n}\npublic fn studio_app() {\n    return appkit.App(\"LMap\", \"sh.t.lmap\", \"1.0.0\").page(\"Home\", Home);\n}\n"
+    );
+    let f_lmap = flatkit.bundle(d_lmap);
+    let lmap = flatkit.line_map();
+    check_ok(
+        f_lmap != "" and check_strict(f_lmap, "a24_lmap"),
+        "A-29 app importing studio/I18n bundles and passes --deny-warnings"
+    );
+    check_ok(lmap.len() >= 15, "A-24 FlatKit.line_map records framework + user module ranges");
+    // Locate the line containing 'DIR=' in the flat bundle and verify map_line points back to app.matrix line 6
+    let flat_lines = f_lmap.split("\n");
+    let found_flat_line = 0;
+    let fli = 0;
+    while fli < flat_lines.len() {
+        if string(flat_lines[fli]).contains("\"DIR=\"") {
+            found_flat_line = fli + 1;
+            break;
+        }
+        fli += 1;
+    }
+    let mapped = flatkit.map_line(found_flat_line);
+    check_ok(
+        found_flat_line > 0 and mapped.has("file") and string(mapped["file"]).ends_with("app.matrix") and int(mapped["line"]) == 6,
+        "A-24 FlatKit.map_line maps flat line back to exact app.matrix:6"
+    );
+    let h_lmap = run_bundle_html(f_lmap, "a24_lmap");
+    check_ok(
+        h_lmap.contains("DIR=rtl") and h_lmap.contains("dir=\"rtl\""),
+        "A-29 bundled I18n sets RTL direction in WASM output"
+    );
 
     dir_remove(dir);
     println("flatkit passed: " + string(passed) + "  failed: " + string(failed));

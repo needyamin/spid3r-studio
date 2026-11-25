@@ -270,6 +270,13 @@ public fn cmd_install_tools() -> int {
         fs.abs_path(appimg)
     };
 
+    let arch_key = if arch == "aarch64" or arch == "arm64" {
+        "aarch64"
+    } else {
+        "x86_64"
+    };
+    let expected_sha = ex.catalog_sha256("xtool-ios", arch_key);
+
     if not file_exists(appimg) or file_size(appimg) < 1000000 {
         println("downloading xtool " + XTOOL_VERSION + " (" + arch + ") -> " + appimg);
         let dl = run_bash("curl -fL " + sh_quote(url) + " -o " + sh_quote(wapp));
@@ -278,8 +285,30 @@ public fn cmd_install_tools() -> int {
             println("error: failed to download xtool " + XTOOL_VERSION);
             return 1;
         }
+        if expected_sha != "" {
+            if not ex.verify_sha256(
+                appimg,
+                expected_sha,
+                "xtool " + XTOOL_VERSION + " (" + arch_key + ")"
+            ) {
+                let _rm = remove_file(appimg);
+                return 1;
+            }
+            println("[ok] SHA-256 verified for downloaded xtool AppImage");
+        }
     } else {
         println("using cached xtool AppImage: " + appimg);
+        if expected_sha != "" {
+            if not ex.verify_sha256(
+                appimg,
+                expected_sha,
+                "cached xtool " + XTOOL_VERSION + " (" + arch_key + ")"
+            ) {
+                println("hint: delete " + appimg + " and re-run install-tools.");
+                return 1;
+            }
+            println("[ok] SHA-256 verified for cached xtool AppImage");
+        }
     }
 
     let apprun = managed_apprun();

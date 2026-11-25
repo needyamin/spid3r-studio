@@ -16,7 +16,9 @@ public fn usage() {
         "  dev <appdir> [--target T]       Hot-reload preview (--target web [--host IP] [--port N] | ios)"
     );
     println("  check <appdir>                    Static-check the app entry");
-    println("  build <appdir> [--target T]       T = web (default) | android | ios | desktop");
+    println(
+        "  build <appdir> [--target T] [--release]  T = web (default) | android | ios | desktop"
+    );
     println(
         "  ios <subcommand>                  Manage xtool & deploy iOS (install-tools|status|setup|devices|run)"
     );
@@ -47,8 +49,12 @@ public fn arg_value(args: list, flag: string) -> string {
 public fn has_flag(args: list, flag: string) -> bool {
     for item in args {
         let a = string(item);
-        if a == flag or a.starts_with(flag + "=") {
+        if a == flag {
             return true;
+        }
+        if a.starts_with(flag + "=") {
+            let v = a.slice(flag.len() + 1, a.len()).trim().lower();
+            return v != "false" and v != "0" and v != "no";
         }
     }
     return false;

@@ -15,8 +15,6 @@ import "pages/Home" as p_home;
 import "pages/Detail" as p_detail;
 import "pages/Stats" as p_stats;
 
-let next_seq = 3;
-
 fn load_tasks() {
     let t = storage.get_list("tasks");
     if t.len() == 0 {
@@ -37,6 +35,9 @@ fn load_tasks() {
         storage.set("tasks", t);
     }
     state.set("tasks", t);
+    if storage.get("next_seq", null) == null {
+        storage.set("next_seq", t.len());
+    }
 }
 
 fn add_task(_ev) {
@@ -44,7 +45,8 @@ fn add_task(_ev) {
     if draft == "" {
         return;
     }
-    next_seq += 1;
+    let next_seq = int(storage.get("next_seq", 3)) + 1;
+    storage.set("next_seq", next_seq);
     let t = state.get_list("tasks");
     t.push({
         "id": "tx" + string(next_seq),

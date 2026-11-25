@@ -2,14 +2,156 @@
 // Persistent key/value storage backed by a JSON file (native + dev targets).
 // Call configure() once at boot with the app's data directory.
 
+import "Util" as U;
+
 let cache = {
 };
 let dir = "storage";
 let mem_only = false;
 let last_error = "";
+let storage_version = 0;
+let corrupt_flag = false;
+let dirty_flag = false;
+let auto_flush = true;
+let disk_save_count = 0;
+let cur_schema_ver = 0;
+
+const SCHEMA_KEY = "__schema_version";
 
 fn file_path() -> string {
     return dir + "/kv.json";
+}
+
+fn backup_path() -> string {
+    return dir + "/kv.json.bak";
+}
+
+/// Monotonic mutation counter for skipping redundant persistence writes (A-03).
+public fn version() -> int {
+    return storage_version;
+}
+
+/// Restore the mutation counter carried by a wasm host envelope.
+public fn set_version(v: int) {
+    if v >= 0 {
+        storage_version = v;
+    }
+}
+
+/// Current storage schema version (0 when unversioned) (A-26).
+public fn schema_version() -> int {
+    if cache.has(SCHEMA_KEY) {
+        return U.ival(cache, SCHEMA_KEY, cur_schema_ver);
+    }
+    return cur_schema_ver;
+}
+
+/// Set schema version explicitly and mark dirty (A-26).
+public fn set_schema_version(v: int) {
+    if v >= 0 {
+        cur_schema_ver = v;
+        cache[SCHEMA_KEY] = v;
+        storage_version += 1;
+        dirty_flag = true;
+        if auto_flush {
+            flush();
+        }
+    }
+}
+
+/// Run an ordered schema migration when current schema_version() < target_version (A-26).
+/// migrate_fn(from_version: int, data: map) -> map? returns transformed store map (or mutates & returns it).
+/// Refuses to run while a corrupt storage file lock is active, and rolls back if auto-flush fails.
+public fn migrate(target_version: int, migrate_fn) -> bool {
+    if corrupt_flag {
+        if not last_error.starts_with("refusing to overwrite corrupt storage file") {
+            last_error = "refusing to overwrite corrupt storage file until reset(): " + last_error;
+        }
+        return false;
+    }
+    let cur = schema_version();
+    if cur >= target_version {
+        return false;
+    }
+    let snap_cache = U.deep_copy(cache);
+    let snap_schema = cur_schema_ver;
+    let snap_ver = storage_version;
+    let snap_dirty = dirty_flag;
+    let next = migrate_fn(cur, U.deep_copy(cache));
+    if next != null and type_of(next) == "map" {
+        cache = U.deep_copy(next);
+    }
+    cur_schema_ver = target_version;
+    cache[SCHEMA_KEY] = target_version;
+    storage_version += 1;
+    dirty_flag = true;
+    if auto_flush {
+        let ok = flush();
+        if not ok {
+            cache = snap_cache;
+            cur_schema_ver = snap_schema;
+            storage_version = snap_ver;
+            dirty_flag = snap_dirty;
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Whether in-memory mutations have not yet been flushed to disk (A-26).
+public fn is_dirty() -> bool {
+    return dirty_flag;
+}
+
+/// Toggle immediate persistence on set()/remove() vs explicit flush()/batch() (A-26).
+public fn set_auto_flush(flag: bool) {
+    auto_flush = flag;
+}
+
+/// Number of actual disk saves performed since configure()/reset() (A-03/A-26).
+public fn save_count() -> int {
+    return disk_save_count;
+}
+
+/// Flush pending dirty mutations to disk; skips I/O when clean (A-26).
+public fn flush() -> bool {
+    if not dirty_flag {
+        return true;
+    }
+    let ok = save();
+    if ok {
+        dirty_flag = false;
+    }
+    return ok;
+}
+
+/// Batch multiple storage mutations into a single atomic disk flush (A-26).
+/// Rolls back in-memory state cleanly if fn_block throws.
+public fn batch(fn_block) -> bool {
+    let prev = auto_flush;
+    let snap_cache = U.deep_copy(cache);
+    let snap_schema = cur_schema_ver;
+    let snap_ver = storage_version;
+    let snap_dirty = dirty_flag;
+    auto_flush = false;
+    let err_thrown = null;
+    try {
+        fn_block();
+    } catch (e) {
+        err_thrown = e;
+    }
+    auto_flush = prev;
+    if err_thrown != null {
+        cache = snap_cache;
+        cur_schema_ver = snap_schema;
+        storage_version = snap_ver;
+        dirty_flag = snap_dirty;
+        throw err_thrown;
+    }
+    if prev {
+        return flush();
+    }
+    return true;
 }
 
 /// Toggle memory-only mode (no disk I/O in wasm/browser targets).
@@ -28,6 +170,10 @@ public fn configure(d: string) {
     cache = {
     };
     last_error = "";
+    corrupt_flag = false;
+    dirty_flag = false;
+    disk_save_count = 0;
+    cur_schema_ver = 0;
     if mem_only {
         return;
     }
@@ -39,9 +185,13 @@ public fn configure(d: string) {
 }
 
 /// Load the store from disk (safe when the file does not exist yet).
+/// Preserves corrupt files and surfaces last_err() instead of silently overwriting (A-44).
 public fn load() {
     cache = {
     };
+    corrupt_flag = false;
+    dirty_flag = false;
+    cur_schema_ver = 0;
     if mem_only {
         return;
     }
@@ -53,25 +203,38 @@ public fn load() {
                 let parsed = json_parse(t);
                 if type_of(parsed) == "map" {
                     cache = parsed;
+                    if cache.has(SCHEMA_KEY) {
+                        cur_schema_ver = U.ival(cache, SCHEMA_KEY, 0);
+                    }
+                    last_error = "";
                 } else {
                     cache = {
                     };
+                    corrupt_flag = true;
                     last_error = "storage root is not a map";
                 }
             } catch (e) {
                 cache = {
                 };
+                corrupt_flag = true;
                 last_error = string(e);
             }
         }
     }
 }
 
-/// Persist the store atomically via a temporary file rename.
+/// Persist the store atomically via a backup + temporary file rename (A-44).
 public fn save() -> bool {
     if mem_only {
         last_error = "";
+        dirty_flag = false;
         return true;
+    }
+    if corrupt_flag {
+        if not last_error.starts_with("refusing to overwrite corrupt storage file") {
+            last_error = "refusing to overwrite corrupt storage file until reset(): " + last_error;
+        }
+        return false;
     }
     if not is_dir(dir) {
         let mk = dir_create(dir);
@@ -80,6 +243,9 @@ public fn save() -> bool {
         }
     }
     let payload = json_write(cache);
+    if file_exists(file_path()) {
+        let _bk = copy_file(file_path(), backup_path());
+    }
     let tmp = file_path() + ".tmp";
     let wr = write_file(tmp, payload);
     if wr.is_err() {
@@ -95,48 +261,54 @@ public fn save() -> bool {
             return false;
         }
     }
+    disk_save_count += 1;
+    dirty_flag = false;
     last_error = "";
     return true;
 }
 
-/// Read a value, or dflt when unset.
+/// Read a value as a deep defensive copy, or dflt when unset.
 public fn get(k: string, dflt = null) -> any {
     if cache.has(k) {
-        return cache[k];
+        return U.deep_copy(cache[k]);
     }
     return dflt;
 }
 
-/// Write a value and persist.
+/// Write a value (stored as a deep defensive copy) and persist (unless batched/deferred).
 public fn set(k: string, v) {
-    cache[k] = v;
-    save();
+    cache[k] = U.deep_copy(v);
+    storage_version += 1;
+    dirty_flag = true;
+    if auto_flush {
+        flush();
+    }
 }
 
-/// Read a list (default []).
+/// Read a list as a deep defensive copy (default []).
 public fn get_list(k: string) -> list {
     if cache.has(k) {
         let v = cache[k];
         if type_of(v) == "list" {
-            return v;
+            return U.deep_copy(v);
         }
     }
     return [];
 }
 
-/// Read a map (default {}).
+/// Read a map as a deep defensive copy (default {}).
 public fn get_map(k: string) -> map {
     if cache.has(k) {
         let v = cache[k];
         if type_of(v) == "map" {
-            return v;
+            return U.deep_copy(v);
         }
     }
     return {
     };
 }
 
-/// Delete a key and persist.
+/// Delete a key and persist (unless batched/deferred).
 public fn remove(k: string) {
     if cache.has(k) {
         let next = {
@@ -147,30 +319,40 @@ public fn remove(k: string) {
             }
         }
         cache = next;
+        storage_version += 1;
+        dirty_flag = true;
     }
-    save();
+    if auto_flush and dirty_flag {
+        flush();
+    }
 }
 
-/// Clear in-memory cache and last error (does not wipe disk unless saved).
+/// Clear in-memory cache and last error (also clears corruption lock for explicit recovery).
 public fn reset() {
     cache = {
     };
     last_error = "";
+    corrupt_flag = false;
+    dirty_flag = false;
+    cur_schema_ver = 0;
+    disk_save_count = 0;
+    storage_version += 1;
 }
 
-/// Entire store snapshot.
+/// Entire store snapshot as a deep defensive copy (A-07).
 public fn all() -> map {
-    return cache;
+    return U.deep_copy(cache);
 }
 
 /// Restore a store carried by the wasm host envelope (no disk write).
 public fn hydrate(m: map) {
     if m != null and type_of(m) == "map" {
-        let next = {
-        };
-        for (k, v) in m {
-            next[k] = v;
+        cache = U.deep_copy(m);
+        if cache.has(SCHEMA_KEY) {
+            cur_schema_ver = U.ival(cache, SCHEMA_KEY, 0);
+        } else {
+            cur_schema_ver = 0;
         }
-        cache = next;
+        dirty_flag = false;
     }
 }

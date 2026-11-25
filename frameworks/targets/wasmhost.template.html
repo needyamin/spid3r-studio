@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob: https: http: appstudio:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http: appstudio:; object-src 'none'; base-uri 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob: https: appstudio:; connect-src {{APP_CSP_CONNECT_SRC}}; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: appstudio:; object-src 'none'; base-uri 'none'; form-action 'self';{{APP_CSP_EXTRA}}">
 <title>{{APP_TITLE}}</title>
 {{APP_ICON_TAG}}
 {{APP_PWA_TAGS}}
@@ -12,12 +12,14 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
 #studio-busy{position:fixed;top:0;left:0;right:0;height:3px;z-index:10000;pointer-events:none;opacity:0;transition:opacity 120ms ease;background:linear-gradient(90deg,transparent,var(--primary,#4f46e5),transparent);background-size:40% 100%;background-repeat:no-repeat;animation:studio-busy-slide 1s linear infinite;}
 #studio-busy.on{opacity:1;}
 @keyframes studio-busy-slide{0%{background-position:-40% 0;}100%{background-position:140% 0;}}
+#studio-offline{position:fixed;top:0;left:0;right:0;padding:6px 12px;font:600 12px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;text-align:center;background:#b45309;color:#ffffff;z-index:10001;display:none;}
 #studio-boot{position:fixed;inset:auto 0 0 0;padding:10px 14px;font:12px/1.5 ui-monospace,monospace;background:#0b0f17;color:#7dd3fc;white-space:pre-wrap;z-index:9999;display:none;}
 </style>
 </head>
 <body>
 <div id="spid3r-root"></div>
 <div id="studio-busy" aria-hidden="true"></div>
+<div id="studio-offline" role="status" aria-live="polite">Offline — running from local cache</div>
 <div id="studio-boot">booting studio runtime…</div>
 <script src="spid3r.js"></script>
 <script>
@@ -27,6 +29,7 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
 (function() {
   var bootBox = document.getElementById('studio-boot');
   var busyBar = document.getElementById('studio-busy');
+  var offlineBar = document.getElementById('studio-offline');
   var busyTimer = null;
   function bootLog(s) { bootBox.style.display = 'block'; bootBox.textContent = s; }
   function bootHide() { bootBox.style.display = 'none'; }
@@ -41,12 +44,35 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
     busyTimer = null;
     if (busyBar) { busyBar.classList.remove('on'); }
   }
+  function syncOfflineBanner() {
+    if (!offlineBar || typeof navigator === 'undefined') { return; }
+    offlineBar.style.display = (navigator.onLine === false) ? 'block' : 'none';
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', syncOfflineBanner);
+    window.addEventListener('offline', syncOfflineBanner);
+    syncOfflineBanner();
+  }
 
-  var APP_SOURCE_JSON = {{APP_SOURCE_JSON}};     // null => fetch("app.matrix")
   var APP_BUNDLE_ID = {{APP_BUNDLE_ID_JSON}};
   var APP_THEME_JSON = {{APP_THEME_JSON}};
   var STORAGE_KEY = 'studio:storage:' + String(APP_BUNDLE_ID || 'default');
   var THEME_KEY = 'studio:theme:' + String(APP_BUNDLE_ID || 'default');
+
+  function makeSessionNonce() {
+    try {
+      if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+        var buf = new Uint8Array(8);
+        crypto.getRandomValues(buf);
+        var out = '';
+        for (var i = 0; i < buf.length; i++) {
+          out += ('0' + buf[i].toString(16)).slice(-2);
+        }
+        return out;
+      }
+    } catch (_e) {}
+    return Math.random().toString(16).slice(2, 10) + Date.now().toString(16).slice(-6);
+  }
 
   function readLocalJson(key) {
     try {
@@ -75,9 +101,107 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
     router: null,
     state: null,
     storage: readLocalJson(STORAGE_KEY),
-    theme: readLocalJson(THEME_KEY) || APP_THEME_JSON
+    theme: readLocalJson(THEME_KEY) || APP_THEME_JSON,
+    i18n: null
   };
+  var cachedLineMap = null;
+  var iosHostBridgeSeq = 0;
+  var iosHostCallbacks = Object.create(null);
+
+  function callIosDurable(action, payload, fireAndForget) {
+    return new Promise(function(resolve) {
+      var h = (typeof window !== 'undefined' && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.studioNative);
+      if (!h || typeof h.postMessage !== 'function') { resolve(null); return; }
+      if (fireAndForget) {
+        try {
+          h.postMessage({ id: '', action: action, payload: payload || {} });
+        } catch (_e1) {}
+        resolve(null);
+        return;
+      }
+      var id = 'host_nat_' + (++iosHostBridgeSeq);
+      var settled = false;
+      var finish = function(val) {
+        if (settled) { return; }
+        settled = true;
+        clearTimeout(t);
+        delete iosHostCallbacks[id];
+        resolve(val);
+      };
+      var t = setTimeout(function() { finish(null); }, 1500);
+      iosHostCallbacks[id] = finish;
+      if (!window.__studioHostWrappedCb) {
+        window.__studioHostWrappedCb = true;
+        var origCb = window.__studioNativeCallback;
+        window.__studioNativeCallback = function(reqId, res) {
+          if (iosHostCallbacks[reqId]) {
+            iosHostCallbacks[reqId](res);
+            return;
+          }
+          if (typeof origCb === 'function') { origCb(reqId, res); }
+        };
+      }
+      try {
+        h.postMessage({ id: id, action: action, payload: payload || {} });
+      } catch (_e2) {
+        finish(null);
+      }
+    });
+  }
+
+  function mirrorDurableStorage(val) {
+    if (detectPlatform() !== 'ios') { return; }
+    try {
+      var jsonStr = (val && typeof val === 'object' && !Array.isArray(val)) ? JSON.stringify(val) : '{}';
+      callIosDurable('storage_write', { key: STORAGE_KEY, value: jsonStr }, true);
+    } catch (_e) {}
+  }
+
+  function hydrateDurableIosStorage() {
+    if (detectPlatform() !== 'ios') { return Promise.resolve(); }
+    return callIosDurable('storage_read', { key: STORAGE_KEY }).then(function(res) {
+      if (res && res.ok && typeof res.value === 'string' && res.value.trim() !== '') {
+        try {
+          var parsed = JSON.parse(res.value);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            envelope.storage = parsed;
+            writeLocalJson(STORAGE_KEY, parsed);
+          }
+        } catch (_e) {}
+      }
+    }).catch(function() {});
+  }
+
+  function resolveSourceLine(flatLine) {
+    if (!flatLine || flatLine <= 0) { return Promise.resolve(''); }
+    var lookup = function(mapArr) {
+      if (!Array.isArray(mapArr)) { return ''; }
+      for (var i = 0; i < mapArr.length; i++) {
+        var m = mapArr[i];
+        if (m && flatLine >= m.start_line && flatLine <= m.end_line) {
+          return String(m.file || m.mod_id || '') + ':' + String(flatLine - m.start_line + 1);
+        }
+      }
+      return '';
+    };
+    if (cachedLineMap !== null) {
+      return Promise.resolve(lookup(cachedLineMap));
+    }
+    if (typeof fetch !== 'function') { return Promise.resolve(''); }
+    return fetch('app.matrix.map.json').then(function(r) {
+      if (!r || !r.ok) { cachedLineMap = []; return ''; }
+      return r.json().then(function(arr) {
+        cachedLineMap = Array.isArray(arr) ? arr : [];
+        return lookup(cachedLineMap);
+      });
+    }).catch(function() { cachedLineMap = []; return ''; });
+  }
   var themeVersion = 0;
+  var storageVersion = 0;
+  var lastStoragePersisted = -1;
+  var lastHtmlHash = '';
+  var sessionNonce = makeSessionNonce();
+  var frameEpoch = 1;
   var eventQueue = [];
   var busy = false;
   var sp = null;
@@ -103,13 +227,12 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
   };
 
   window.__studioBack = function() {
-    var depth = (envelope.router && envelope.router.stacks && envelope.router.tabs)
-      ? (function() {
-          var t = String(envelope.router.tab || '');
-          var st = envelope.router.stacks[t];
-          return Array.isArray(st) ? st.length : 1;
-        })()
-      : 1;
+    var depth = 1;
+    if (envelope.router && Array.isArray(envelope.router.stacks)) {
+      var idx = (typeof envelope.router.active === 'number') ? envelope.router.active : 0;
+      var st = envelope.router.stacks[idx];
+      depth = Array.isArray(st) ? st.length : 1;
+    }
     if (depth <= 1) { return false; }
     eventQueue.push({ sid: '__studio_back__', kind: 'back', value: null, arg: null });
     drainQueue();
@@ -131,10 +254,25 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
     try {
       dark = !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
     } catch (_e) {}
+    var plat = detectPlatform();
+    var hasIosNative = !!(typeof window !== 'undefined' && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.studioNative);
+    var hasAndroidNative = !!(typeof window !== 'undefined' && window.StudioAndroid);
+    var hasWebCrypto = !!(typeof crypto !== 'undefined' && crypto.subtle);
     return {
-      platform: detectPlatform(),
+      platform: plat,
       prefers_dark: dark,
-      viewport_width: (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : 0
+      viewport_width: (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : 0,
+      capabilities: {
+        clipboard: true,
+        open_url: true,
+        haptic: hasIosNative || (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function'),
+        secure_store: hasIosNative || hasAndroidNative || hasWebCrypto,
+        durable_storage: hasIosNative || (typeof localStorage !== 'undefined'),
+        files: true,
+        share: hasIosNative || hasAndroidNative || (typeof navigator !== 'undefined' && typeof navigator.share === 'function'),
+        auth: true,
+        deep_link: true
+      }
     };
   }
 
@@ -157,8 +295,13 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
       router: envelope.router,
       state: envelope.state,
       storage: envelope.storage,
+      storage_version: storageVersion,
       theme: envelope.theme,
       theme_version: themeVersion,
+      i18n: envelope.i18n,
+      html_hash: lastHtmlHash,
+      slot_nonce: sessionNonce,
+      frame_epoch: frameEpoch,
       caps: currentCaps()
     });
   }
@@ -169,7 +312,13 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
       bootLog('studio error: ' + errMsg);
     } else if (!res || !res.ok) {
       var r = res || {};
-      bootLog('app error: ' + (r.error || r.thrown || 'unknown') + (r.line ? (' @' + r.line + ':' + r.col) : ''));
+      var baseMsg = 'app error: ' + (r.error || r.thrown || 'unknown') + (r.line ? (' @' + r.line + ':' + r.col) : '');
+      bootLog(baseMsg);
+      if (r.line) {
+        resolveSourceLine(Number(r.line)).then(function(mapped) {
+          if (mapped) { bootLog(baseMsg + ' (' + mapped + ')'); }
+        });
+      }
     } else {
       bootHide();
       applyProtocol(String(res.stdout || ''));
@@ -186,11 +335,31 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
     worker.postMessage({ id: id, type: 'eval', evJson: evJson });
   }
 
+  var mainSessionLoaded = false;
+
   function runOnMainThread(evJson) {
-    var src = appSrc.replace('let STUDIO_EVENT_JSON = "";', function() {
-      return 'let STUDIO_EVENT_JSON = ' + spid3rLiteral(evJson) + ';';
-    });
     try {
+      if (sp && typeof sp.evalSession === 'function') {
+        if (!mainSessionLoaded) {
+          var cut = appSrc.lastIndexOf('// @@STUDIO_MAIN_START@@');
+          if (cut >= 0) {
+            var initRes = sp.evalSession(appSrc.slice(0, cut), 'vm');
+            if (initRes && initRes.ok) {
+              mainSessionLoaded = true;
+            } else if (typeof sp.resetSession === 'function') {
+              try { sp.resetSession(); } catch (_r) {}
+            }
+          }
+        }
+        if (mainSessionLoaded) {
+          var sres = sp.evalSession('__studio_dispatch(' + spid3rLiteral(evJson) + ');', 'vm');
+          finishEval(sres, null);
+          return;
+        }
+      }
+      var src = appSrc.replace('let STUDIO_EVENT_JSON = "";', function() {
+        return 'let STUDIO_EVENT_JSON = ' + spid3rLiteral(evJson) + ';';
+      });
       var res = sp.eval(src, 'vm');
       finishEval(res, null);
     } catch (e) {
@@ -227,6 +396,7 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
     }
     if (!frame || typeof frame !== 'object') { return; }
 
+    var themeChanged = false;
     if (typeof frame.css === 'string' && frame.css !== '') {
       var el = document.querySelector('style[data-studio]');
       if (!el) {
@@ -237,7 +407,17 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
       el.textContent = frame.css;
     }
     if (typeof frame.theme_version === 'number' && frame.theme_version > 0) {
+      if (frame.theme_version !== themeVersion) { themeChanged = true; }
       themeVersion = frame.theme_version;
+    }
+    if (typeof frame.html_hash === 'string' && frame.html_hash !== '') {
+      lastHtmlHash = frame.html_hash;
+    }
+    if (typeof frame.slot_nonce === 'string' && frame.slot_nonce !== '') {
+      sessionNonce = frame.slot_nonce;
+    }
+    if (typeof frame.frame_epoch === 'number' && frame.frame_epoch > 0) {
+      frameEpoch = frame.frame_epoch;
     }
     if (typeof frame.html === 'string') {
       var rootEl = document.getElementById('spid3r-root');
@@ -254,8 +434,19 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
     envelope.state = (frame.state && typeof frame.state === 'object') ? frame.state : null;
     envelope.storage = (frame.storage && typeof frame.storage === 'object') ? frame.storage : null;
     envelope.theme = (frame.theme && typeof frame.theme === 'object') ? frame.theme : null;
-    writeLocalJson(STORAGE_KEY, envelope.storage);
-    writeLocalJson(THEME_KEY, envelope.theme);
+    if (frame.i18n && typeof frame.i18n === 'object') {
+      envelope.i18n = frame.i18n;
+    }
+    var nextSv = (typeof frame.storage_version === 'number') ? frame.storage_version : storageVersion;
+    if (nextSv !== lastStoragePersisted) {
+      writeLocalJson(STORAGE_KEY, envelope.storage);
+      mirrorDurableStorage(envelope.storage);
+      lastStoragePersisted = nextSv;
+    }
+    storageVersion = nextSv;
+    if (themeChanged) {
+      writeLocalJson(THEME_KEY, envelope.theme);
+    }
     if (Array.isArray(frame.effects) && frame.effects.length > 0 && window.__studio && typeof window.__studio.runEffects === 'function') {
       window.__studio.runEffects(frame.effects);
     }
@@ -334,8 +525,9 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
   async function boot() {
     try {
       bootLog('loading studio wasm worker…');
-      appSrc = (APP_SOURCE_JSON !== null) ? APP_SOURCE_JSON : await fetchText('app.matrix');
-      eventQueue.push(null);
+      await hydrateDurableIosStorage();
+      appSrc = await fetchText('app.matrix');
+      eventQueue.unshift(null);
       var ok = await startWorker();
       if (ok) {
         bootLog('starting app…');
@@ -351,7 +543,12 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
   if (typeof navigator !== 'undefined' && navigator.serviceWorker && typeof location !== 'undefined') {
     var swOk = (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1');
     if (swOk && location.protocol !== 'appstudio:' && location.hostname !== 'appassets.androidplatform.net') {
-      navigator.serviceWorker.register('sw.js').catch(function() {});
+      navigator.serviceWorker.addEventListener('controllerchange', syncOfflineBanner);
+      navigator.serviceWorker.register('sw.js').catch(function(err) {
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('[AppStudio] service worker registration failed:', err);
+        }
+      });
     }
   }
 

@@ -78,7 +78,229 @@ public fn probe_spid3r_version() -> string {
     return probe_version("spid3r", ["--version"]);
 }
 
+fn is_hex_sha256(s: string) -> bool {
+    let t = string(s).trim().lower();
+    if t.len() != 64 {
+        return false;
+    }
+    let i = 0;
+    while i < 64 {
+        let c = t[i];
+        let ok = (c >= "0" and c <= "9") or (c >= "a" and c <= "f");
+        if not ok {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+/// Compute lowercase 64-hex SHA-256 digest of a file on disk (A-14).
+public fn sha256_file(path: string) -> string {
+    if not file_exists(path) {
+        return "";
+    }
+    if fs.is_windows() {
+        let rc = exec_capture("certutil", ["-hashfile", path, "SHA256"], null);
+        if rc.is_ok() and int(rc.unwrap()["code"]) == 0 {
+            for row in string(rc.unwrap()["stdout"]).split("\n") {
+                let clean = string(row).replace("\r", "").replace(" ", "").trim().lower();
+                if is_hex_sha256(clean) {
+                    return clean;
+                }
+            }
+        }
+    } else {
+        let rs = exec_capture("sha256sum", [path], null);
+        if rs.is_ok() and int(rs.unwrap()["code"]) == 0 {
+            let tok = string(
+                string(rs.unwrap()["stdout"]).trim().split(" ")[0]
+            ).trim().lower();
+            if is_hex_sha256(tok) {
+                return tok;
+            }
+        }
+        let rm = exec_capture("shasum", ["-a", "256", path], null);
+        if rm.is_ok() and int(rm.unwrap()["code"]) == 0 {
+            let tok2 = string(
+                string(rm.unwrap()["stdout"]).trim().split(" ")[0]
+            ).trim().lower();
+            if is_hex_sha256(tok2) {
+                return tok2;
+            }
+        }
+    }
+    let py_cmd = if fs.is_windows() {
+        "python"
+    } else {
+        "python3"
+    };
+    let rp = exec_capture(
+        py_cmd,
+        ["-c",
+        "import hashlib,sys;h=hashlib.sha256();f=open(sys.argv[1],'rb');h.update(f.read());f.close();print(h.hexdigest())",
+        path],
+        null
+    );
+    if rp.is_ok() and int(rp.unwrap()["code"]) == 0 {
+        let dig = string(rp.unwrap()["stdout"]).trim().lower();
+        if is_hex_sha256(dig) {
+            return dig;
+        }
+    }
+    return "";
+}
+
+/// Verify a file's SHA-256 digest against an expected 64-hex string (A-14).
+public fn verify_sha256(path: string, expected: string, label: string) -> bool {
+    let exp = string(expected).trim().lower();
+    if exp == "" {
+        return true;
+    }
+    if not is_hex_sha256(exp) {
+        println(
+            "error[security]: invalid expected SHA-256 digest configured for " + label + ": " + exp
+        );
+        return false;
+    }
+    let actual = sha256_file(path);
+    if actual == "" {
+        println("error[security]: could not compute SHA-256 for " + label + " (" + path + ")");
+        return false;
+    }
+    if actual != exp {
+        println("error[security]: SHA-256 mismatch for " + label + " (" + path + ")");
+        println("  expected: " + exp);
+        println("  actual:   " + actual);
+        return false;
+    }
+    return true;
+}
+
+/// Read downloads/packages/catalog.json.
+public fn read_catalog() -> map {
+    let p = fs.join_dir(fs.downloads_dir(), "packages/catalog.json");
+    let r = read_file(p);
+    if r.is_err() {
+        return {
+        };
+    }
+    try {
+        let m = json_parse(string(r.unwrap()));
+        if type_of(m) == "map" {
+            return m;
+        }
+    } catch (_e) {
+        return {
+        };
+    }
+    return {
+    };
+}
+
+/// Look up a pinned SHA-256 digest in catalog.json for pkg_id (and optional arch/file subkey).
+public fn catalog_sha256(pkg_id: string, subkey: string = "") -> string {
+    let cat = read_catalog();
+    if not cat.has("packages") or type_of(cat["packages"]) != "list" {
+        return "";
+    }
+    for entry in cat["packages"] {
+        if type_of(entry) != "map" or not entry.has("id") {
+            continue;
+        }
+        if string(entry["id"]) != pkg_id {
+            continue;
+        }
+        if subkey != "" and entry.has("sha256ByArch") and type_of(entry["sha256ByArch"]) == "map" {
+            let am = entry["sha256ByArch"];
+            if am.has(subkey) {
+                return string(am[subkey]).trim().lower();
+            }
+        }
+        if entry.has("sha256") and entry["sha256"] != null {
+            return string(entry["sha256"]).trim().lower();
+        }
+        return "";
+    }
+    return "";
+}
+
+fn catalog_wasm_digests(ver: string) -> map {
+    let cat = read_catalog();
+    if not cat.has("packages") or type_of(cat["packages"]) != "list" {
+        return {
+        };
+    }
+    for entry in cat["packages"] {
+        if type_of(entry) == "map" and entry.has("id") and string(entry["id"]) == "spid3r-wasm-runtime" {
+            if entry.has("sha256ByVersion") and type_of(entry["sha256ByVersion"]) == "map" {
+                let byv = entry["sha256ByVersion"];
+                if byv.has(ver) and type_of(byv[ver]) == "map" {
+                    return byv[ver];
+                }
+            }
+        }
+    }
+    return {
+    };
+}
+
+fn write_wasm_sidecar(dl_dir: string) {
+    let js_h = sha256_file(dl_dir + "/spid3r.js");
+    let wasm_h = sha256_file(dl_dir + "/spid3r.wasm");
+    if js_h != "" and wasm_h != "" {
+        let sidecar = js_h + "  spid3r.js\n" + wasm_h + "  spid3r.wasm\n";
+        let _w = write_file(dl_dir + "/checksums.sha256", sidecar);
+    }
+}
+
+fn verify_wasm_cache(dl_dir: string, ver: string) -> bool {
+    let pinned = catalog_wasm_digests(ver);
+    if pinned.has("spid3r.js") and not verify_sha256(
+        dl_dir + "/spid3r.js",
+        string(pinned["spid3r.js"]),
+        "cached spid3r.js (" + ver + ")"
+    ) {
+        return false;
+    }
+    if pinned.has("spid3r.wasm") and not verify_sha256(
+        dl_dir + "/spid3r.wasm",
+        string(pinned["spid3r.wasm"]),
+        "cached spid3r.wasm (" + ver + ")"
+    ) {
+        return false;
+    }
+    let side_p = dl_dir + "/checksums.sha256";
+    if file_exists(side_p) {
+        let sr = read_file(side_p);
+        if sr.is_err() {
+            println("error[security]: cannot read " + side_p);
+            return false;
+        }
+        for row in string(sr.unwrap()).split("\n") {
+            let t = string(row).replace("\r", "").trim();
+            if t == "" {
+                continue;
+            }
+            let parts = t.split("  ");
+            if parts.len() >= 2 {
+                let dig = string(parts[0]).trim();
+                let fname = string(parts[1]).trim();
+                if fname == "spid3r.js" or fname == "spid3r.wasm" {
+                    if not verify_sha256(dl_dir + "/" + fname, dig, "cached " + fname) {
+                        return false;
+                    }
+                }
+            }
+        }
+    } else {
+        write_wasm_sidecar(dl_dir);
+    }
+    return true;
+}
+
 /// Provide spid3r.js + spid3r.wasm, caching once under <fw_root>/downloads/wasm-runtime/<version>/.
+/// Verifies SHA-256 integrity against catalog pins and checksums.sha256 on cache hit (A-14).
 public fn wasm_runtime_assets(tmpdir: string) -> string {
     let ver = probe_spid3r_version();
     if ver == "" {
@@ -87,6 +309,9 @@ public fn wasm_runtime_assets(tmpdir: string) -> string {
     let dl_root = fs.join_dir(fs.downloads_dir(), "wasm-runtime");
     let dl_dir = fs.join_dir(dl_root, ver);
     if file_exists(dl_dir + "/spid3r.js") and file_exists(dl_dir + "/spid3r.wasm") {
+        if not verify_wasm_cache(dl_dir, ver) {
+            return "";
+        }
         return dl_dir;
     }
 
@@ -118,6 +343,10 @@ public fn wasm_runtime_assets(tmpdir: string) -> string {
     let cj = copy_file(assets + "/spid3r.js", dl_dir + "/spid3r.js");
     let cw = copy_file(assets + "/spid3r.wasm", dl_dir + "/spid3r.wasm");
     if cj.is_ok() and cw.is_ok() {
+        write_wasm_sidecar(dl_dir);
+        if not verify_wasm_cache(dl_dir, ver) {
+            return "";
+        }
         dir_remove(tmpdir);
         return dl_dir;
     }

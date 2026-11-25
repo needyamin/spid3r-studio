@@ -2,33 +2,35 @@
 // Reactive app state: a plain key/value store. Every dispatched UI event is
 // followed by a page re-render, so mutating state in a handler is enough.
 
+import "Util" as U;
+
 let store = {
 };
 
-/// Read a value (null when unset).
+/// Read a value as a deep defensive copy (null when unset).
 public fn get(k: string) -> any {
     if store.has(k) {
-        return store[k];
+        return U.deep_copy(store[k]);
     }
     return null;
 }
 
-/// Read with a default.
+/// Read with a default (deep defensive copy when set).
 public fn get_or(k: string, dflt) -> any {
     if store.has(k) {
-        return store[k];
+        return U.deep_copy(store[k]);
     }
     return dflt;
 }
 
-/// Write a value. Takes effect on the next render (after the current event).
+/// Write a value (stored as a deep defensive copy). Takes effect on the next render.
 public fn set(k: string, v) {
-    store[k] = v;
+    store[k] = U.deep_copy(v);
 }
 
 /// Apply a function to a value in place: state.update("count", x => x + 1).
 public fn update(k: string, f) {
-    store[k] = f(get_or(k, null));
+    store[k] = U.deep_copy(f(get_or(k, null)));
 }
 
 /// Number helpers.
@@ -36,23 +38,23 @@ public fn incr(k: string, by: int = 1) {
     store[k] = int(get_or(k, 0)) + by;
 }
 
-/// Read a list value (default []).
+/// Read a list value as a deep defensive copy (default []).
 public fn get_list(k: string) -> list {
     if store.has(k) {
         let v = store[k];
         if type_of(v) == "list" {
-            return v;
+            return U.deep_copy(v);
         }
     }
     return [];
 }
 
-/// Read a map value (default {}).
+/// Read a map value as a deep defensive copy (default {}).
 public fn get_map(k: string) -> map {
     if store.has(k) {
         let v = store[k];
         if type_of(v) == "map" {
-            return v;
+            return U.deep_copy(v);
         }
     }
     return {
@@ -72,12 +74,17 @@ public fn reset() {
     };
 }
 
-/// Whole-store snapshot (used by Storage sync + tests).
+/// Whole-store snapshot as a deep defensive copy (used by Storage sync + tests).
 public fn snapshot() -> map {
-    return store;
+    return U.deep_copy(store);
 }
 
-/// Replace the whole store (used on boot restore).
+/// Replace the whole store as a deep defensive copy (used on boot restore).
 public fn restore(s: map) {
-    store = s;
+    if s != null and type_of(s) == "map" {
+        store = U.deep_copy(s);
+    } else {
+        store = {
+        };
+    }
 }

@@ -6,11 +6,24 @@ import "Manifest" as man;
 import "Exec" as ex;
 import "BuildWeb" as b_web;
 
-public fn build(appdir: string, outdir: string, flat: string, client_js: string) -> int {
+public fn build(
+    appdir: string,
+    outdir: string,
+    flat: string,
+    client_js: string,
+    release: bool = false
+) -> int {
     fs.ensure_dir(outdir);
     fs.setup_import_path();
     let name = man.app_name_of(appdir);
     let bundle_id = man.app_bundle_id_of(appdir);
+    if not man.is_valid_bundle_id(bundle_id) {
+        println("error: invalid bundleID '" + bundle_id + "' in studio.json (must be reverse-DNS)");
+        return 1;
+    }
+    if b_web.verify_flat_bundle(flat, outdir) != 0 {
+        return 1;
+    }
     let swift_name = fs.sanitize_swift_ident(name);
     let pkg = outdir + "/" + swift_name;
     let src_dir = pkg + "/Sources/" + swift_name;
@@ -35,31 +48,100 @@ public fn build(appdir: string, outdir: string, flat: string, client_js: string)
     if not fs.write_checked(resdir + "/app.matrix", flat) {
         return 1;
     }
-    if b_web.fill_host_page(appdir, resdir, flat, client_js, false) != 0 {
+    if b_web.fill_host_page(appdir, resdir, client_js, release) != 0 {
         return 1;
     }
 
     let xtool_icon = "";
     let icon_src = man.app_icon_of(appdir);
+    let icon_filename = "";
     if icon_src != "" and fs.file_ext(icon_src) == "png" {
         if copy_file(icon_src, pkg + "/icon.png").is_ok() {
             xtool_icon = "\niconPath: icon.png";
+            icon_filename = "AppIcon-1024.png";
         }
     }
 
+    // Keep Assets.xcassets outside Sources/<Target>/ so SwiftPM on Linux/WSL does not invoke
+    // macOS-only actool during xtool builds while preserving full Xcode/App Store icon metadata.
+    let xcassets_dir = pkg + "/Assets.xcassets";
+    let appicon_dir = xcassets_dir + "/AppIcon.appiconset";
+    fs.ensure_dir(xcassets_dir);
+    fs.ensure_dir(appicon_dir);
+    if not fs.write_checked(
+        xcassets_dir + "/Contents.json",
+        "{\n  \"info\" : {\n    \"author\" : \"appstudio\",\n    \"version\" : 1\n  }\n}\n"
+    ) {
+        return 1;
+    }
+    let icon_entry = {
+        "idiom": "universal",
+        "platform": "ios",
+        "size": "1024x1024",
+    };
+    if icon_filename != "" {
+        if copy_file(icon_src, appicon_dir + "/" + icon_filename).is_ok() {
+            icon_entry["filename"] = icon_filename;
+        }
+    }
+    let appicon_meta = {
+        "images": [icon_entry],
+        "info": {
+            "author": "appstudio", "version": 1
+        }
+        ,
+    };
+    if not fs.write_checked(appicon_dir + "/Contents.json", json_write(appicon_meta) + "\n") {
+        return 1;
+    }
+
+    let orient_xml = "";
+    for orient in man.ios_orientations_of(appdir) {
+        if orient_xml != "" {
+            orient_xml += "\n";
+        }
+        orient_xml += "        <string>" + fs.html_escape(string(orient)) + "</string>";
+    }
+    let ats_val = if man.ios_allows_arbitrary_loads_of(appdir) {
+        "<true/>"
+    } else {
+        "<false/>"
+    };
+    let schemes = man.app_url_schemes_of(appdir);
+    let url_types_xml = "";
+    if schemes.len() > 0 {
+        url_types_xml = "\n    <key>CFBundleURLTypes</key>\n    <array>\n        <dict>\n            <key>CFBundleTypeRole</key>\n            <string>Editor</string>\n            <key>CFBundleURLName</key>\n            <string>" + fs.html_escape(bundle_id) + "</string>\n            <key>CFBundleURLSchemes</key>\n            <array>";
+        for sc in schemes {
+            url_types_xml += "\n                <string>" + fs.html_escape(string(sc)) + "</string>";
+        }
+        url_types_xml += "\n            </array>\n        </dict>\n    </array>";
+    }
+    let app_ver = man.app_version_of(appdir);
+    let ver_code = man.app_version_code_of(appdir);
+
     let vars = {
         "APP_NAME": name,
+        "APP_NAME_XML": fs.html_escape(name),
+        "APP_VERSION": app_ver,
+        "APP_VERSION_XML": fs.html_escape(app_ver),
+        "VERSION_CODE": ver_code,
         "SWIFT_NAME": swift_name,
-        "BUNDLE_ID": bundle_id,
+        "BUNDLE_ID": fs.yaml_quote(bundle_id),
+        "BUNDLE_ID_XML": fs.html_escape(bundle_id),
         "PKG_DIR": pkg,
         "IOS_DEPLOYMENT_TARGET": man.ios_deployment_target_of(appdir),
+        "IOS_ORIENTATIONS_XML": orient_xml,
+        "IOS_ATS_ARBITRARY": ats_val,
+        "IOS_URL_TYPES_XML": url_types_xml,
         "XTOOL_ICON_LINE": xtool_icon,
     };
     let t_pkg = fs.render_template("targets/ios/Package.swift.tmpl", vars);
     let t_app = fs.render_template("targets/ios/App.swift.tmpl", vars);
+    let t_plist = fs.render_template("targets/ios/Info.plist.tmpl", vars);
+    let t_ent = fs.render_template("targets/ios/Entitlements.plist.tmpl", vars);
     let t_xtool = fs.render_template("targets/ios/xtool.yml.tmpl", vars);
     let t_readme = fs.render_template("targets/ios/README.md.tmpl", vars);
-    if t_pkg == "" or t_app == "" or t_xtool == "" or t_readme == "" {
+    if t_pkg == "" or t_app == "" or t_plist == "" or t_ent == "" or t_xtool == "" or t_readme == "" {
         return 1;
     }
     if not fs.write_checked(pkg + "/Package.swift", t_pkg) {
@@ -68,21 +150,40 @@ public fn build(appdir: string, outdir: string, flat: string, client_js: string)
     if not fs.write_checked(src_dir + "/App.swift", t_app) {
         return 1;
     }
+    if not fs.write_checked(pkg + "/Info.plist", t_plist) {
+        return 1;
+    }
+    if not fs.write_checked(pkg + "/Entitlements.plist", t_ent) {
+        return 1;
+    }
     if not fs.write_checked(pkg + "/xtool.yml", t_xtool) {
         return 1;
     }
     if not fs.write_checked(pkg + "/README.md", t_readme) {
         return 1;
     }
+    if not man.emit_sbom(appdir, pkg, "ios", release) {
+        return 1;
+    }
 
-    println("done: " + pkg);
+    let mode_lbl = if release {
+        "release"
+    } else {
+        "debug"
+    };
+    println("done (" + mode_lbl + "): " + pkg);
     println(
-        "  Package.swift / Sources/" + swift_name + "/App.swift (WKURLSchemeHandler) / xtool.yml"
+        "  Package.swift / Info.plist / Entitlements.plist / Sources/" + swift_name + "/App.swift / xtool.yml"
     );
     println("  bundleID: " + bundle_id);
     println("");
-    println("Deploy to iPhone (no Mac needed):");
-    println("  cd " + pkg);
-    println("  xtool dev");
+    if release {
+        println("Release packaging:");
+        println("  Review Entitlements.plist + sbom.json and archive with Xcode or xtool release.");
+    } else {
+        println("Deploy to iPhone (no Mac needed):");
+        println("  cd " + pkg);
+        println("  xtool dev");
+    }
     return 0;
 }

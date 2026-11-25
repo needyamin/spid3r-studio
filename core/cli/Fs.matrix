@@ -286,7 +286,12 @@ public fn html_escape(s: string) -> string {
 }
 
 public fn kotlin_str_escape(s: string) -> string {
-    return string(s).replace("\\", "\\\\").replace("\"", "\\\"");
+    return string(s).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("$", "\\$");
+}
+
+public fn yaml_quote(s: string) -> string {
+    let t = string(s).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
+    return "\"" + t + "\"";
 }
 
 public fn safe_script_json(v) -> string {

@@ -1,0 +1,154 @@
+// studio/I18n.matrix
+// Internationalization, message catalog interpolation, and RTL direction helpers (A-29).
+
+let current_locale = "en";
+let fallback_locale = "en";
+let catalogs = {
+};
+
+const RTL_LANGS = [
+"ar", "he", "iw", "fa", "ur", "ps", "sd", "ug", "yi", "dv",
+];
+
+fn norm_locale(loc: string) -> string {
+    return string(loc).trim().replace("_", "-").lower();
+}
+
+fn base_lang(loc: string) -> string {
+    let n = norm_locale(loc);
+    if n == "" {
+        return "en";
+    }
+    let parts = n.split("-");
+    if parts.len() > 0 {
+        return string(parts[0]);
+    }
+    return n;
+}
+
+/// Active locale identifier (normalized lowercase BCP-47, e.g. "en", "ar-eg").
+public fn locale() -> string {
+    return current_locale;
+}
+
+/// Switch active locale (e.g. "en", "fr", "ar", "he-IL").
+public fn set_locale(loc: string) {
+    let n = norm_locale(loc);
+    if n != "" {
+        current_locale = n;
+    }
+}
+
+/// Set the fallback locale used when a key is missing in the active locale.
+public fn set_fallback(loc: string) {
+    let n = norm_locale(loc);
+    if n != "" {
+        fallback_locale = n;
+    }
+}
+
+/// Register or merge a translation map for a locale.
+public fn register(loc: string, messages: map) {
+    let n = norm_locale(loc);
+    if n == "" or messages == null or type_of(messages) != "map" {
+        return;
+    }
+    let bucket = if catalogs.has(n) and type_of(catalogs[n]) == "map" {
+        catalogs[n]
+    } else {
+        {
+        }
+    };
+    for (k, v) in messages {
+        bucket[string(k)] = string(v);
+    }
+    catalogs[n] = bucket;
+}
+
+/// Whether the given (or active) locale uses right-to-left script direction.
+public fn is_rtl(loc: string = "") -> bool {
+    let target = if loc.trim() != "" {
+        loc
+    } else {
+        current_locale
+    };
+    let lang = base_lang(target);
+    for r in RTL_LANGS {
+        if lang == string(r) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Text direction attribute value ("rtl" or "ltr") for the given or active locale.
+public fn dir(loc: string = "") -> string {
+    if is_rtl(loc) {
+        return "rtl";
+    }
+    return "ltr";
+}
+
+fn lookup_raw(loc: string, key: string) -> string ? {
+    if catalogs.has(loc) {
+        let cat = catalogs[loc];
+        if type_of(cat) == "map" and cat.has(key) {
+            return string(cat[key]);
+        }
+    }
+    return null;
+}
+
+/// Translate a message key using active locale -> base language -> fallback -> key.
+/// Replaces {name} placeholders from optional params map.
+public fn t(key: string, params = null) -> string {
+    let val = lookup_raw(current_locale, key);
+    if val == null {
+        let bl = base_lang(current_locale);
+        if bl != current_locale {
+            val = lookup_raw(bl, key);
+        }
+    }
+    if val == null and fallback_locale != current_locale {
+        val = lookup_raw(fallback_locale, key);
+    }
+    let out = if val != null {
+        string(val)
+    } else {
+        key
+    };
+    if params != null and type_of(params) == "map" {
+        for (pk, pv) in params {
+            out = out.replace("{" + string(pk) + "}", string(pv));
+        }
+    }
+    return out;
+}
+
+/// Serializable snapshot for wasm host envelope round-tripping.
+public fn snapshot() -> map {
+    return {
+        "locale": current_locale, "fallback": fallback_locale
+    };
+}
+
+/// Restore locale state from a snapshot map.
+public fn restore(m: map) {
+    if m == null or type_of(m) != "map" {
+        return;
+    }
+    if m.has("locale") and m["locale"] != null {
+        set_locale(string(m["locale"]));
+    }
+    if m.has("fallback") and m["fallback"] != null {
+        set_fallback(string(m["fallback"]));
+    }
+}
+
+/// Reset locale and registered message catalogs to defaults.
+public fn reset() {
+    current_locale = "en";
+    fallback_locale = "en";
+    catalogs = {
+    };
+}

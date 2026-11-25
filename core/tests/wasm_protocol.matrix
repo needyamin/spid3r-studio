@@ -60,6 +60,25 @@ fn eval_wasm_frame(flat: string, tmp_file: string, env_obj) -> map {
     };
 }
 
+fn os_temp_base() -> string {
+    for k in ["TMPDIR", "TEMP", "TMP"] {
+        let ev = env(k);
+        if string(ev) != "none" {
+            let p = string(ev.unwrap()).replace("\\", "/");
+            while p.len() > 1 and p.ends_with("/") {
+                p = p.slice(0, p.len() - 1);
+            }
+            if p != "" and is_dir(p) {
+                return p;
+            }
+        }
+    }
+    if is_dir("/tmp") {
+        return "/tmp";
+    }
+    return ".";
+}
+
 fn cleanup(dirs: list) {
     for d in dirs {
         if is_dir(d) {
@@ -69,9 +88,11 @@ fn cleanup(dirs: list) {
 }
 
 fn main() -> int {
-    let wdir = "_test_wasm_proto_tmp";
-    let cdir = "_test_cli_smoke";
-    cleanup([wdir, cdir]);
+    let tbase = os_temp_base() + "/appstudio_test_wasm";
+    cleanup([tbase]);
+    dir_create(tbase);
+    let wdir = tbase + "/proto";
+    let cdir = tbase + "/cli_smoke";
 
     dir_create(wdir);
     let app_src = r#"import "studio/App" as appkit;
@@ -169,7 +190,7 @@ public fn studio_app() {
         "boot frame returns theme_version=1"
     );
     if not f1.has("html") {
-        cleanup([wdir, cdir]);
+        cleanup([wdir, cdir, tbase]);
         return 1;
     }
 
@@ -202,7 +223,7 @@ public fn studio_app() {
         "router depth becomes 2"
     );
     if not f2.has("html") {
-        cleanup([wdir, cdir]);
+        cleanup([wdir, cdir, tbase]);
         return 1;
     }
 
@@ -250,7 +271,7 @@ public fn studio_app() {
     check_ok(int(f4["theme_version"]) == 2, "theme_version increments on mode change");
     check_ok(string(f4["css"]).contains("#0b0f1a"), "dark CSS emitted on theme change");
 
-    // Frame 5: effects queue emits all 4 unified effects
+    // Frame 5: effects queue emits all 4 unified effects + storage_version & html_hash checks (A-03)
     let f5 = eval_wasm_frame(flat, runner, {
         "event": {
             "sid": "do_effects", "kind": "tap"
@@ -259,8 +280,12 @@ public fn studio_app() {
         "router": f4["router"],
         "state": f4["state"],
         "storage": f4["storage"],
+        "storage_version": f4["storage_version"],
         "theme": f4["theme"],
         "theme_version": f4["theme_version"],
+        "html_hash": f4["html_hash"],
+        "slot_nonce": f4["slot_nonce"],
+        "frame_epoch": f4["frame_epoch"],
         "caps": {
             "platform": "web"
         }
@@ -269,6 +294,229 @@ public fn studio_app() {
     check_ok(
         f5.has("effects") and f5["effects"].len() == 4,
         "frame delivers 4 host effects"
+    );
+    // A-40: async HTTP req_id persists monotonically across separate WASM evals via State
+    let f5b = eval_wasm_frame(flat, runner, {
+        "event": {
+            "sid": "do_effects", "kind": "tap"
+        }
+        ,
+        "router": f5["router"],
+        "state": f5["state"],
+        "storage": f5["storage"],
+        "storage_version": f5["storage_version"],
+        "theme": f5["theme"],
+        "theme_version": f5["theme_version"],
+        "html_hash": f5["html_hash"],
+        "caps": {
+            "platform": "ios", "prefers_dark": true, "viewport_width": 390
+        }
+        ,
+    });
+    check_ok(
+        f5["effects"][3]["req_id"] == "http1" and f5b["effects"][3]["req_id"] == "http2",
+        "A-40 WASM async HTTP req_id increments monotonically across re-evals"
+    );
+    check_ok(
+        int(f2["storage_version"]) > int(f1["storage_version"]) and int(f5["storage_version"]) == int(f4["storage_version"]),
+        "A-03 storage_version increments on mutation and stays stable when unchanged"
+    );
+    check_ok(
+        f5.has("html") and f5["html"] == null and string(f5["html_hash"]) == string(f4["html_hash"]),
+        "A-03 unchanged HTML omitted (html=null) when client sends matching html_hash"
+    );
+
+    // A-13 WASM closure slot handshake: authentic nonce+epoch dispatches, forged/stale epoch rejected
+    let c_dir = wdir + "_closure";
+    dir_create(c_dir);
+    write_file(
+        c_dir + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+import "studio/State" as state;
+fn Home() -> map {
+    return ui.page([
+        ui.text("CNT=" + string(state.get_or("cnt", 0))),
+        ui.button("Inc", (_ev) => { state.incr("cnt", 1); }),
+    ]);
+}
+public fn studio_app() { return appkit.App("ClsApp", "sh.t.cls", "1.0.0").page("Home", Home); }
+"#
+    );
+    let c_flat = flatkit.bundle(c_dir);
+    let c_runner = c_dir + "/run.matrix";
+    let cf1 = eval_wasm_frame(c_flat, c_runner, {
+        "event": null, "slot_nonce": "aabbccdd11223344", "frame_epoch": 1
+    });
+    let expected_sid = "f_aabbccdd11223344_1_1";
+    check_ok(
+        cf1.has("html") and string(cf1["html"]).contains("data-tap=\"" + expected_sid + "\""),
+        "A-13 WASM boot emits nonce+epoch authenticated closure sid"
+    );
+    // Forged predictable sid "f1" is rejected
+    let cf_forged = eval_wasm_frame(c_flat, c_runner, {
+        "event": {
+            "sid": "f1", "kind": "tap"
+        }
+        ,
+        "router": cf1["router"],
+        "state": cf1["state"],
+        "slot_nonce": cf1["slot_nonce"],
+        "frame_epoch": cf1["frame_epoch"],
+    });
+    check_ok(
+        cf_forged.has("html") and string(cf_forged["html"]).contains("CNT=0"),
+        "A-13 WASM rejects guessed predictable sid 'f1'"
+    );
+    // Authentic current-frame sid dispatches
+    let cf_ok = eval_wasm_frame(c_flat, c_runner, {
+        "event": {
+            "sid": expected_sid, "kind": "tap"
+        }
+        ,
+        "router": cf1["router"],
+        "state": cf1["state"],
+        "slot_nonce": cf1["slot_nonce"],
+        "frame_epoch": cf1["frame_epoch"],
+    });
+    check_ok(
+        cf_ok.has("html") and string(cf_ok["html"]).contains("CNT=1") and int(cf_ok["frame_epoch"]) == 2,
+        "A-13 WASM dispatches authentic closure sid and advances frame_epoch"
+    );
+    // Replaying epoch-1 sid against epoch-2 frame is rejected
+    let cf_replay = eval_wasm_frame(c_flat, c_runner, {
+        "event": {
+            "sid": expected_sid, "kind": "tap"
+        }
+        ,
+        "router": cf_ok["router"],
+        "state": cf_ok["state"],
+        "slot_nonce": cf_ok["slot_nonce"],
+        "frame_epoch": cf_ok["frame_epoch"],
+    });
+    check_ok(
+        cf_replay.has("html") and string(cf_replay["html"]).contains("CNT=1"),
+        "A-13 WASM rejects replayed stale-epoch closure sid"
+    );
+    dir_remove(c_dir);
+
+    // Same-frame flushed closure input + closure tap dispatches atomically in one epoch (A-13 + ClientJS flushInputs)
+    let fl_dir = tbase + "/flush_dir";
+    dir_remove(fl_dir);
+    dir_create(fl_dir);
+    write_file(
+        fl_dir + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+import "studio/State" as state;
+fn Home() -> map {
+    return ui.page([
+        ui.text("SUB=" + string(state.get_or("sub", ""))),
+        ui.input("Name", (ev) => { state.set("draft", ev["value"]); }, string(state.get_or("draft", ""))),
+        ui.button("Send", (_ev) => { state.set("sub", state.get_or("draft", "")); }),
+    ]);
+}
+public fn studio_app() { return appkit.App("FlushApp", "sh.t.flush", "1.0.0").page("Home", Home); }
+"#
+    );
+    let fl_flat = flatkit.bundle(fl_dir);
+    let fl_runner = fl_dir + "/runner.matrix";
+    let fl_f1 = eval_wasm_frame(fl_flat, fl_runner, {
+        "slot_nonce": "flsess", "frame_epoch": 1
+    });
+    let fl_f2 = eval_wasm_frame(fl_flat, fl_runner, {
+        "event": {
+            "sid": "f_flsess_1_2",
+            "kind": "tap",
+            "flushed": [{
+                "sid": "f_flsess_1_1", "kind": "input", "value": "hello-flush"
+            }
+            ],
+        }
+        ,
+        "router": fl_f1["router"],
+        "state": fl_f1["state"],
+        "slot_nonce": fl_f1["slot_nonce"],
+        "frame_epoch": fl_f1["frame_epoch"],
+    });
+    check_ok(
+        fl_f2.has("html") and string(fl_f2["html"]).contains("SUB=hello-flush") and int(fl_f2["frame_epoch"]) == 2,
+        "A-13 WASM dispatches same-frame flushed closure input + closure tap atomically"
+    );
+    dir_remove(fl_dir);
+
+    // A-53, A-29, A-03: WASM deep-link dispatch + i18n snapshot + perf.render_ms
+    let dl_dir = tbase + "/deeplink_dir";
+    dir_remove(dl_dir);
+    dir_create(dl_dir);
+    write_file(
+        dl_dir + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+import "studio/State" as state;
+import "studio/I18n" as i18n;
+fn Home() -> map {
+    return ui.page([
+        ui.text("CODE=" + string(state.get_or("auth_code", "")) + "|LOC=" + i18n.locale()),
+    ]);
+}
+public fn studio_app() {
+    return appkit.App("DLApp", "sh.t.dl", "1.0.0")
+        .page("Home", Home)
+        .on_deep_link((ev) => {
+            if ev.has("parsed") and type_of(ev["parsed"]) == "map" and ev["parsed"].has("query") {
+                let q = ev["parsed"]["query"];
+                if q.has("code") {
+                    state.set("auth_code", q["code"]);
+                }
+            }
+        });
+}
+"#
+    );
+    let dl_flat = flatkit.bundle(dl_dir);
+    let dl_runner = dl_dir + "/runner.matrix";
+    let dl_f = eval_wasm_frame(dl_flat, dl_runner, {
+        "event": {
+            "sid": "__studio_deep_link__",
+            "kind": "deep_link",
+            "value": "myapp://auth/cb?code=oauth99",
+            "arg": "myapp://auth/cb?code=oauth99",
+        }
+        ,
+        "i18n": {
+            "locale": "ar"
+        }
+        ,
+    });
+    check_ok(
+        dl_f.has("html") and string(dl_f["html"]).contains("CODE=oauth99|LOC=ar") and string(dl_f["html"]).contains("dir=\"rtl\""),
+        "A-53/A-29 WASM dispatches App.on_deep_link with parsed query and restores i18n RTL locale"
+    );
+    check_ok(
+        dl_f.has("perf") and type_of(dl_f["perf"]) == "map" and dl_f["perf"].has("render_ms"),
+        "A-03 WASM frame includes perf.render_ms instrumentation"
+    );
+    dir_remove(dl_dir);
+
+    // Verify A-01 Android hardware back contract in wasmhost.template.html
+    let host_tpl = read_file("frameworks/targets/wasmhost.template.html");
+    let host_tpl_s = if host_tpl.is_ok() {
+        string(host_tpl.unwrap())
+    } else {
+        ""
+    };
+    check_ok(
+        host_tpl_s.contains("envelope.router.active") and host_tpl_s.contains("envelope.router.stacks[idx]") and not host_tpl_s.contains("envelope.router.tab"),
+        "A-01 wasmhost __studioBack indexes router.stacks by router.active"
+    );
+    check_ok(
+        host_tpl_s.contains("studio-offline") and host_tpl_s.contains("controllerchange"),
+        "A-52 wasmhost includes offline banner and SW controllerchange hook"
+    );
+    check_ok(
+        not host_tpl_s.contains("APP_SOURCE_JSON"),
+        "A-49 dead inline_sources APP_SOURCE_JSON removed from wasmhost"
     );
 
     // ---------- CLI Integration Smoke: new -> check -> upgrade -> build -> dev --once -> clean ----------
@@ -286,6 +534,10 @@ public fn studio_app() {
     check_ok(
         r_new.is_ok() and int(r_new.unwrap()["code"]) == 0,
         "CLI new scaffolds SmokeApp"
+    );
+    check_ok(
+        file_exists(smoke + "/studio.json") and not file_exists(smoke + "/spider.toml"),
+        "A-10 CLI new writes studio.json only (no unused spider.toml)"
     );
 
     dir_create(smoke + "/assets");
@@ -381,9 +633,42 @@ public fn studio_app() {
         "android copies assets/"
     );
     let ag = read_file(smoke + "/build/android/AndroidApp/app/build.gradle.kts");
+    let ag_s = if ag.is_ok() {
+        string(ag.unwrap())
+    } else {
+        ""
+    };
     check_ok(
-        ag.is_ok() and string(ag.unwrap()).contains("minSdk = 26") and string(ag.unwrap()).contains("targetSdk = 35"),
-        "android gradle uses manifest SDK versions"
+        ag_s.contains("minSdk = 26") and ag_s.contains("targetSdk = 35") and ag_s.contains("compileSdk = 35") and ag_s.contains("STUDIO_VERSION_CODE"),
+        "A-47 android gradle uses manifest SDK versions and supports CI versionCode override"
+    );
+    check_ok(
+        file_exists(smoke + "/build/android/AndroidApp/gradlew") and file_exists(smoke + "/build/android/AndroidApp/gradlew.bat") and file_exists(
+            smoke + "/build/android/AndroidApp/gradle/wrapper/gradle-wrapper.properties"
+        ),
+        "A-47 android build emits Gradle wrapper files"
+    );
+    let nsc = read_file(
+        smoke + "/build/android/AndroidApp/app/src/main/res/xml/network_security_config.xml"
+    );
+    let amf = read_file(smoke + "/build/android/AndroidApp/app/src/main/AndroidManifest.xml");
+    check_ok(
+        nsc.is_ok() and string(nsc.unwrap()).contains("cleartextTrafficPermitted=\"false\"") and amf.is_ok() and string(amf.unwrap()).contains(
+            "networkSecurityConfig=\"@xml/network_security_config\""
+        ),
+        "A-18 android build emits explicit network_security_config.xml wired in AndroidManifest.xml"
+    );
+    let ma = read_file(
+        smoke + "/build/android/AndroidApp/app/src/main/java/sh/smoke/app/MainActivity.kt"
+    );
+    let ma_s = if ma.is_ok() {
+        string(ma.unwrap())
+    } else {
+        ""
+    };
+    check_ok(
+        ma_s.contains("shouldOverrideUrlLoading") and ma_s.contains("onSaveInstanceState") and ma_s.contains("restoreState"),
+        "A-48 & A-17 android MainActivity restricts navigation and restores WebView state"
     );
 
     let r_ios = exec_capture(
@@ -406,13 +691,89 @@ public fn studio_app() {
         "ios Package.swift uses deploymentTarget"
     );
     let xt = read_file(smoke + "/build/ios/SmokeApp/xtool.yml");
+    let xt_s = if xt.is_ok() {
+        string(xt.unwrap())
+    } else {
+        ""
+    };
     check_ok(
-        xt.is_ok() and string(xt.unwrap()).contains("iconPath: icon.png"),
-        "ios xtool.yml sets iconPath"
+        xt_s.contains("iconPath: icon.png") and xt_s.contains("infoPath: Info.plist"),
+        "A-15 ios xtool.yml sets iconPath and infoPath: Info.plist"
+    );
+    let plist = read_file(smoke + "/build/ios/SmokeApp/Info.plist");
+    let plist_s = if plist.is_ok() {
+        string(plist.unwrap())
+    } else {
+        ""
+    };
+    check_ok(
+        plist_s.contains("<key>CFBundleDisplayName</key>") and plist_s.contains("Smoke App") and plist_s.contains("<key>UILaunchScreen</key>") and plist_s.contains("<key>NSAppTransportSecurity</key>"),
+        "A-15 ios build generates Info.plist with display name, launch screen, and ATS config"
+    );
+    let appicon_json = read_file(
+        smoke + "/build/ios/SmokeApp/Assets.xcassets/AppIcon.appiconset/Contents.json"
+    );
+    check_ok(
+        appicon_json.is_ok() and string(appicon_json.unwrap()).contains("1024x1024"),
+        "A-15 ios build emits AppIcon.appiconset 1024x1024 metadata"
+    );
+    let ios_app = read_file(smoke + "/build/ios/SmokeApp/Sources/SmokeApp/App.swift");
+    let ios_app_s = if ios_app.is_ok() {
+        string(ios_app.unwrap())
+    } else {
+        ""
+    };
+    check_ok(
+        ios_app_s.contains("WKNavigationDelegate") and not ios_app_s.contains("Access-Control-Allow-Origin"),
+        "A-48 iOS App.swift enforces WKNavigationDelegate and drops wildcard CORS"
     );
     check_ok(
         file_exists(smoke + "/build/ios/SmokeApp/Sources/SmokeApp/Resources/app/assets/badge.svg"),
         "ios copies assets/"
+    );
+
+    // Live CLI negative gate tests (A-49 secret scanner & A-38 --deny-warnings)
+    let bad_sec = cdir + "/BadSecretApp";
+    dir_create(bad_sec);
+    let secret_lit = "AKIA" + "0123456789ABCDEF";
+    write_file(
+        bad_sec + "/app.matrix",
+        "import \"studio/App\" as appkit;\nimport \"studio/Components\" as ui;\nfn Home() -> map { return ui.page([ui.text(\"" + secret_lit + "\")]); }\npublic fn studio_app() { return appkit.App(\"BadSec\", \"sh.test.badsec\", \"1.0.0\").page(\"Home\", Home); }\n"
+    );
+    let r_bad_sec = exec_capture(
+        "spid3r",
+        ["run",
+        "studio.matrix",
+        "build",
+        bad_sec,
+        "--target",
+        "web"],
+        null
+    );
+    check_ok(
+        r_bad_sec.is_ok() and int(r_bad_sec.unwrap()["code"]) != 0,
+        "A-49 CLI build rejects app containing hardcoded AWS key"
+    );
+
+    let bad_warn = cdir + "/BadWarnApp";
+    dir_create(bad_warn);
+    write_file(
+        bad_warn + "/app.matrix",
+        "import \"studio/App\" as appkit;\nimport \"studio/Components\" as ui;\nfn helper(unused_p: int) -> int { return 1; }\nfn Home() -> map { return ui.page([ui.text(string(helper(2)))]); }\npublic fn studio_app() { return appkit.App(\"BadWarn\", \"sh.test.badwarn\", \"1.0.0\").page(\"Home\", Home); }\n"
+    );
+    let r_bad_warn = exec_capture(
+        "spid3r",
+        ["run",
+        "studio.matrix",
+        "build",
+        bad_warn,
+        "--target",
+        "web"],
+        null
+    );
+    check_ok(
+        r_bad_warn.is_ok() and int(r_bad_warn.unwrap()["code"]) != 0,
+        "A-38 CLI build fails loudly when flat bundle has --deny-warnings diagnostic"
     );
 
     let r_dev = exec_capture(
@@ -440,7 +801,7 @@ public fn studio_app() {
     let r_is = exec_capture("spid3r", ["run", "studio.matrix", "ios", "status"], null);
     check_ok(r_is.is_ok() and int(r_is.unwrap()["code"]) == 0, "CLI ios status ok");
 
-    cleanup([wdir, cdir]);
+    cleanup([wdir, cdir, tbase]);
     println("wasm_protocol passed: " + string(passed) + "  failed: " + string(failed));
     if failed > 0 {
         return 1;

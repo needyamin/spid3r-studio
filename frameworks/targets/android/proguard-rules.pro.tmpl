@@ -1,0 +1,12 @@
+# AppStudio Android R8 / ProGuard keep rules (A-02 / A-19)
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
+
+# Keep WebView @JavascriptInterface bridge methods intact under R8 minification
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+-keep class {{PACKAGE_NAME}}.MainActivity { *; }
+-keep class {{PACKAGE_NAME}}.StudioNativeBridge { *; }
+
+# Keep AndroidX WebKit WebViewAssetLoader
+-keep class androidx.webkit.** { *; }

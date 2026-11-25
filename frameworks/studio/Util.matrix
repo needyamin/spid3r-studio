@@ -78,14 +78,49 @@ fn is_hex_ch(c: string) -> bool {
     return is_digit_ch(c) or (c >= "a" and c <= "f") or (c >= "A" and c <= "F");
 }
 
+/// Deep defensive copy for lists and maps (prevents nested reference aliasing — A-07).
+public fn deep_copy(v) -> any {
+    let t = type_of(v);
+    if t == "list" {
+        let out = [];
+        for item in v {
+            out.push(deep_copy(item));
+        }
+        return out;
+    }
+    if t == "map" {
+        let out = {
+        };
+        for (k, mv) in v {
+            out[k] = deep_copy(mv);
+        }
+        return out;
+    }
+    return v;
+}
+
 /// Allow safe image/link URLs (http, https, appstudio, raster data:image, relative).
 public fn safe_url(raw: string) -> string {
     let t = string(raw).trim();
     if t == "" {
         return "";
     }
-    let low = t.lower().replace(" ", "").replace("\t", "").replace("\n", "").replace("\r", "");
-    if low.starts_with("//") {
+    let low_raw = t.lower();
+    let low_chars = [];
+    let ci = 0;
+    let cn = low_raw.len();
+    while ci < cn {
+        let ch = low_raw[ci];
+        if ch > " " {
+            low_chars.push(ch);
+        }
+        ci += 1;
+    }
+    let low = low_chars.join("");
+    if low == "" {
+        return "";
+    }
+    if low.starts_with("//") or low.starts_with("/\\") or low.starts_with("\\/") or low.starts_with("\\\\") {
         return "";
     }
     if low.starts_with("https://") or low.starts_with("http://") or low.starts_with("appstudio://") {
@@ -103,6 +138,14 @@ public fn safe_url(raw: string) -> string {
         let ch = low[i];
         if ch == ":" {
             return "";
+        }
+        if ch == "&" {
+            if i + 1 < n and low[i + 1] == "#" {
+                return "";
+            }
+            if low.slice(i, n).starts_with("&colon;") {
+                return "";
+            }
         }
         if ch == "/" or ch == "?" or ch == "#" {
             break;
@@ -194,8 +237,301 @@ public fn esc_css_val(raw: string) -> string {
         i += 1;
     }
     let low = out.lower();
-    if low.contains("expression(") or low.contains("javascript:") or low.contains("url(") {
+    let low_ns = low.replace(" ", "").replace("\t", "");
+    if low_ns.contains("expression(") or low_ns.contains("javascript:") or low_ns.contains("vbscript:") or low_ns.contains("url(") or low_ns.contains("image-set(") or low_ns.contains("-webkit-image-set(") or low_ns.contains("cross-fade(") or low_ns.contains("src(") or low_ns.contains("@import") or low_ns.contains("behavior:") or low_ns.contains("-moz-binding") or low.contains("/*") or low.contains("*/") {
         return "";
+    }
+    return out;
+}
+
+fn is_css_prop_char(c: string) -> bool {
+    return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or is_digit_ch(c) or c == "-";
+}
+
+/// Sanitize an inline CSS style string declaration-by-declaration (A-11).
+public fn esc_style(raw: string) -> string {
+    let s = string(raw).trim();
+    if s == "" {
+        return "";
+    }
+    let parts = s.split(";");
+    let kept = [];
+    for decl in parts {
+        let item = string(decl).trim();
+        if item == "" {
+            continue;
+        }
+        let colon = item.index_of(":");
+        if colon <= 0 or colon + 1 >= item.len() {
+            continue;
+        }
+        let pname = item.slice(0, colon).trim();
+        let pval = item.slice(colon + 1, item.len()).trim();
+        let valid_prop = pname.len() > 0;
+        let k = 0;
+        while k < pname.len() {
+            if not is_css_prop_char(pname[k]) {
+                valid_prop = false;
+                break;
+            }
+            k += 1;
+        }
+        if not valid_prop {
+            continue;
+        }
+        let clean_val = esc_css_val(pval).trim();
+        if clean_val != "" {
+            kept.push(pname + ":" + clean_val + ";");
+        }
+    }
+    return kept.join("");
+}
+
+fn is_allowed_html_tag(tag: string) -> bool {
+    let allowed = [
+    "div", "span", "p", "b", "i", "em", "strong", "u", "small", "br", "hr",
+    "ul", "ol", "li", "code", "pre", "a", "h1", "h2", "h3", "h4", "h5", "h6",
+    "table", "thead", "tbody", "tr", "th", "td",
+    "svg", "g", "path", "circle", "rect", "line", "polyline", "polygon", "ellipse",
+    ];
+    for t in allowed {
+        if t == tag {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn is_allowed_html_attr(attr: string) -> bool {
+    let allowed = [
+    "class", "id", "title", "role", "aria-label", "aria-hidden",
+    "width", "height", "viewbox", "fill", "stroke", "stroke-width",
+    "stroke-linecap", "stroke-linejoin", "d", "x", "y", "x1", "y1", "x2", "y2",
+    "cx", "cy", "r", "rx", "ry", "points", "transform", "xmlns",
+    "colspan", "rowspan", "href", "style",
+    ];
+    for a in allowed {
+        if a == attr {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn is_drop_body_tag(tag: string) -> bool {
+    return tag == "script" or tag == "style" or tag == "iframe" or tag == "object" or tag == "foreignobject";
+}
+
+fn sanitize_tag_attrs(raw_attrs: string) -> string {
+    let s = raw_attrs;
+    let n = s.len();
+    let i = 0;
+    let out = "";
+    while i < n {
+        while i < n and (
+            s[i] == " " or s[i] == "\t" or s[i] == "\r" or s[i] == "\n" or s[i] == "/"
+        ) {
+            i += 1;
+        }
+        if i >= n {
+            break;
+        }
+        let ns = i;
+        while i < n and s[i] != "=" and s[i] != " " and s[i] != "\t" and s[i] != "\r" and s[i] != "\n" and s[i] != "/" {
+            i += 1;
+        }
+        let aname = s.slice(ns, i);
+        let alow = aname.lower();
+        while i < n and (s[i] == " " or s[i] == "\t" or s[i] == "\r" or s[i] == "\n") {
+            i += 1;
+        }
+        let aval = "";
+        let has_val = false;
+        if i < n and s[i] == "=" {
+            has_val = true;
+            i += 1;
+            while i < n and (s[i] == " " or s[i] == "\t" or s[i] == "\r" or s[i] == "\n") {
+                i += 1;
+            }
+            if i < n and (s[i] == "\"" or s[i] == "'") {
+                let q = s[i];
+                i += 1;
+                let vs = i;
+                while i < n and s[i] != q {
+                    i += 1;
+                }
+                aval = s.slice(vs, i);
+                if i < n and s[i] == q {
+                    i += 1;
+                }
+            } else {
+                let vs = i;
+                while i < n and s[i] != " " and s[i] != "\t" and s[i] != "\r" and s[i] != "\n" {
+                    i += 1;
+                }
+                aval = s.slice(vs, i);
+            }
+        }
+        if alow.starts_with("on") or not is_allowed_html_attr(alow) {
+            continue;
+        }
+        if alow == "href" {
+            let safe_h = safe_url(aval);
+            if safe_h == "" or safe_h.lower().starts_with("data:") {
+                continue;
+            }
+            out += " href=\"" + esc_attr(safe_h) + "\"";
+            continue;
+        }
+        if alow == "xmlns" {
+            if aval.trim() != "http://www.w3.org/2000/svg" {
+                continue;
+            }
+            out += " xmlns=\"http://www.w3.org/2000/svg\"";
+            continue;
+        }
+        if alow == "style" {
+            let safe_s = esc_style(aval);
+            if safe_s == "" {
+                continue;
+            }
+            out += " style=\"" + esc_attr(safe_s) + "\"";
+            continue;
+        }
+        let emit_name = if alow == "viewbox" {
+            "viewBox"
+        } else {
+            alow
+        };
+        if has_val {
+            out += " " + emit_name + "=\"" + esc_attr(aval) + "\"";
+        }
+    }
+    return out;
+}
+
+/// Allow-list HTML/SVG sanitizer for ui.html() (A-12): strips script/iframe/object/on*/unsafe URLs
+/// while preserving safe structural markup and inline SVG vector icons.
+public fn sanitize_html(raw: string) -> string {
+    let s = string(raw);
+    let n = s.len();
+    let out = [];
+    let i = 0;
+    let skip_tag = "";
+    while i < n {
+        let c = s[i];
+        if c != "<" {
+            if skip_tag == "" {
+                out.push(c);
+            }
+            i += 1;
+            continue;
+        }
+        let gt = -1;
+        let j = i + 1;
+        let in_q = "";
+        while j < n {
+            let ch = s[j];
+            if in_q != "" {
+                if ch == in_q {
+                    in_q = "";
+                }
+            } elif ch == "\"" or ch == "'" {
+                in_q = ch;
+            } elif ch == ">" {
+                gt = j;
+                break;
+            }
+            j += 1;
+        }
+        if gt < 0 {
+            if skip_tag == "" {
+                out.push("&lt;");
+            }
+            i += 1;
+            continue;
+        }
+        let inner = s.slice(i + 1, gt).trim();
+        i = gt + 1;
+        if inner == "" or inner.starts_with("!") or inner.starts_with("?") {
+            continue;
+        }
+        let is_close = inner.starts_with("/");
+        let body = if is_close {
+            inner.slice(1, inner.len()).trim()
+        } else {
+            inner
+        };
+        let self_close = not is_close and body.ends_with("/");
+        if self_close {
+            body = body.slice(0, body.len() - 1).trim();
+        }
+        let ti = 0;
+        while ti < body.len() and body[ti] != " " and body[ti] != "\t" and body[ti] != "\r" and body[ti] != "\n" and body[ti] != "/" {
+            ti += 1;
+        }
+        let tname = body.slice(0, ti).lower();
+        let rest = if ti < body.len() {
+            body.slice(ti, body.len())
+        } else {
+            ""
+        };
+        if skip_tag != "" {
+            if is_close and tname == skip_tag {
+                skip_tag = "";
+            }
+            continue;
+        }
+        if not is_close and is_drop_body_tag(tname) {
+            if not self_close {
+                skip_tag = tname;
+            }
+            continue;
+        }
+        if not is_allowed_html_tag(tname) {
+            continue;
+        }
+        if is_close {
+            out.push("</" + tname + ">");
+        } else {
+            let clean_a = sanitize_tag_attrs(rest);
+            let close_s = if self_close {
+                "/>"
+            } else {
+                ">"
+            };
+            out.push("<" + tname + clean_a + close_s);
+        }
+    }
+    return out.join("");
+}
+
+const HASH_ASCII = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+const HASH_HEX = "0123456789abcdef";
+
+/// Deterministic 8-hex-char fingerprint for fast frame/HTML equality checks.
+public fn fnv_hex(raw: string) -> string {
+    let s = string(raw);
+    let h = 216613626;
+    let i = 0;
+    let n = s.len();
+    while i < n {
+        let idx = HASH_ASCII.index_of(s[i]);
+        let code = if idx >= 0 {
+            idx + 32
+        } else {
+            127 + (i % 97)
+        };
+        h = ((h * 131) + code) % 2147483647;
+        i += 1;
+    }
+    let out = "";
+    let v = h;
+    let d = 0;
+    while d < 8 {
+        out = HASH_HEX[v % 16] + out;
+        v = v / 16;
+        d += 1;
     }
     return out;
 }

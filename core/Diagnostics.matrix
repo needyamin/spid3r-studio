@@ -40,16 +40,78 @@ public fn suggestion_for_message(msg: string) -> string {
     if low.contains("fn expects") and low.contains("got 2") {
         return "Spid3r BUG-02: gui_on invokes callbacks with 2 arguments (event, payload). Add an optional second parameter: (ev, payload = null) => { ... }.";
     }
+    if low.contains("'_' is already declared") {
+        return "Spid3r BUG-09: 'let _ = ...' is treated as a regular identifier rather than a wildcard discard. Omit 'let _ =' or use distinct variable names (e.g. '_a', '_b').";
+    }
     if low.contains("unused variable") or low.contains("unused import") {
-        return "Strict '--deny-warnings' check flagged an unused binding. Prefix unused variables with '_' (e.g. 'let _ = x;') or remove the unused import.";
+        return "Strict '--deny-warnings' check flagged an unused binding. Prefix unused variables with a distinct '_' name (e.g. '_unused') or remove the unused binding/import.";
     }
     if low.contains("null is not callable") {
         return "Spid3r BUG-10: Expression-form 'if ... { ... } else { ... }' inside a map literal value is miscompiled into a null call at runtime. Bind the 'if/else' expression to a local 'let' variable before building the map literal.";
     }
-    if low.contains("'_' is already declared") {
-        return "Spid3r BUG-09: 'let _ = ...' is treated as a regular identifier rather than a wildcard discard. Omit 'let _ =' or use distinct variable names.";
+    if low.contains("enum") {
+        return "Spid3r A-51: 'enum' declarations type-check in Spid3r v1.1.1 but are silently discarded at runtime (producing unknown name errors when variants are referenced). Replace enums with string/int constants or classes.";
     }
     return "Inspect the referenced file and line number in Code & Debugger, then run 'Compile & Check' to verify your fix.";
+}
+
+/// Lint a .matrix source string for top-level 'enum' declarations discarded by Spid3r v1.1.1 (A-51).
+public fn lint_unsupported_enums(src: string, file_label: string = "") -> list {
+    let warnings = [];
+    let rows = string(src).split("\n");
+    let in_raw = false;
+    let line_no = 0;
+    for raw_row in rows {
+        line_no += 1;
+        let line = string(raw_row).replace("\r", "");
+        let t = line.trim();
+        if in_raw {
+            if t.contains("\"#") {
+                in_raw = false;
+            }
+            continue;
+        }
+        if t.contains("r#\"") and not t.contains("\"#") {
+            in_raw = true;
+            continue;
+        }
+        if t.starts_with("//") or t.starts_with("/*") or t.starts_with("*") {
+            continue;
+        }
+        let rest = "";
+        if t.starts_with("public enum ") {
+            rest = t.slice(12, t.len()).trim();
+        } elif t.starts_with("private enum ") {
+            rest = t.slice(13, t.len()).trim();
+        } elif t.starts_with("enum ") {
+            rest = t.slice(5, t.len()).trim();
+        }
+        if rest != "" {
+            let ename = "";
+            let k = 0;
+            while k < rest.len() {
+                let c = rest[k];
+                let ok = (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "_";
+                if not ok {
+                    break;
+                }
+                ename += c;
+                k += 1;
+            }
+            if ename != "" and (rest.contains("{") or rest.len() == ename.len()) {
+                warnings.push({
+                    "severity": "warning",
+                    "category": "lint-A51",
+                    "message": "Unsupported 'enum " + ename + "' declaration (Spid3r v1.1.1 discards enums at runtime)",
+                    "file": file_label,
+                    "line": line_no,
+                    "col": 1,
+                    "suggestion": suggestion_for_message("enum"),
+                });
+            }
+        }
+    }
+    return warnings;
 }
 
 fn parse_span(line: string) -> map {

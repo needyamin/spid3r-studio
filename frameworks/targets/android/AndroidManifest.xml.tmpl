@@ -3,16 +3,19 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:allowBackup="false"
+        android:usesCleartextTraffic="{{ANDROID_CLEARTEXT}}"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:label="{{APP_NAME_XML}}"{{APP_ICON_ATTR}}
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
+            </intent-filter>{{ANDROID_DEEP_LINK_INTENT_FILTERS}}
         </activity>
     </application>
 </manifest>

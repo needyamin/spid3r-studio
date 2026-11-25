@@ -3,10 +3,13 @@
 // with a uniform response shape:
 //   {"ok": bool, "status": int, "body": string, "json": any|null, "error": string}
 
+import "App" as appkit;
 import "Bridge" as br;
+import "State" as state;
 import "Util" as U;
 
-let async_seq = 0;
+let host_allowlist = [];
+let active_native_requests = 0;
 
 fn wrap(status: int, body: string, err: string = "") -> map {
     let r = {
@@ -28,6 +31,333 @@ fn net_err(msg: string) -> map {
     };
 }
 
+/// Configure an optional outbound host allow-list (A-42).
+/// Supports exact hostnames ("api.example.com") and wildcard subdomains ("*.example.com").
+/// Passing an empty list clears the allow-list (default SSRF block-list remains enforced).
+public fn allow_hosts(hosts: list) {
+    let next = [];
+    if hosts != null and type_of(hosts) == "list" {
+        for raw in hosts {
+            let h = string(raw).trim().lower();
+            while h.ends_with(".") {
+                h = h.slice(0, h.len() - 1);
+            }
+            if h != "" {
+                next.push(h);
+            }
+        }
+    }
+    host_allowlist = next;
+}
+
+/// Clear any configured host allow-list.
+public fn clear_allowed_hosts() {
+    host_allowlist = [];
+}
+
+/// Return a defensive copy of the active host allow-list.
+public fn allowed_hosts() -> list {
+    return U.deep_copy(host_allowlist);
+}
+
+/// Number of in-flight native background HTTP worker requests (A-41).
+public fn active_requests() -> int {
+    return active_native_requests;
+}
+
+fn extract_http_host(low_url: string) -> string {
+    let start = if low_url.starts_with("https://") {
+        8
+    } elif low_url.starts_with("http://") {
+        7
+    } else {
+        -1
+    };
+    if start < 0 {
+        return "";
+    }
+    let rest = low_url.slice(start, low_url.len());
+    let i = 0;
+    let n = rest.len();
+    while i < n and rest[i] != "/" and rest[i] != "?" and rest[i] != "#" {
+        i += 1;
+    }
+    let auth = rest.slice(0, i);
+    let at = auth.index_of("@");
+    if at >= 0 {
+        auth = auth.slice(at + 1, auth.len());
+    }
+    if auth.starts_with("[") {
+        let rb = auth.index_of("]");
+        if rb > 0 {
+            return auth.slice(0, rb + 1);
+        }
+        return auth;
+    }
+    let colon = auth.index_of(":");
+    if colon >= 0 {
+        return auth.slice(0, colon);
+    }
+    return auth;
+}
+
+fn hex_val(c: string) -> int {
+    if c >= "0" and c <= "9" {
+        return int(c);
+    }
+    if c == "a" {
+        return 10;
+    }
+    if c == "b" {
+        return 11;
+    }
+    if c == "c" {
+        return 12;
+    }
+    if c == "d" {
+        return 13;
+    }
+    if c == "e" {
+        return 14;
+    }
+    if c == "f" {
+        return 15;
+    }
+    return -1;
+}
+
+/// Parse a single inet_aton IPv4 component (decimal, 0x hex, or 0-prefixed octal).
+fn parse_ipv4_part(part: string) -> int {
+    let n = part.len();
+    if n == 0 {
+        return -1;
+    }
+    let val = 0;
+    if part.starts_with("0x") {
+        if n <= 2 or n > 10 {
+            return -1;
+        }
+        let i = 2;
+        while i < n {
+            let d = hex_val(part[i]);
+            if d < 0 {
+                return -1;
+            }
+            val = val * 16 + d;
+            if val > 4294967295 {
+                return -1;
+            }
+            i += 1;
+        }
+        return val;
+    }
+    if part.starts_with("0") and n > 1 {
+        if n > 12 {
+            return -1;
+        }
+        let i = 1;
+        while i < n {
+            let c = part[i];
+            if c < "0" or c > "7" {
+                return -1;
+            }
+            val = val * 8 + int(c);
+            if val > 4294967295 {
+                return -1;
+            }
+            i += 1;
+        }
+        return val;
+    }
+    if n > 10 {
+        return -1;
+    }
+    let i = 0;
+    while i < n {
+        let c = part[i];
+        if c < "0" or c > "9" {
+            return -1;
+        }
+        val = val * 10 + int(c);
+        if val > 4294967295 {
+            return -1;
+        }
+        i += 1;
+    }
+    return val;
+}
+
+/// Decode standard, shorthand, decimal, hex, or octal IPv4 hostnames into a 32-bit int (-1 if not IPv4).
+fn decode_ipv4_u32(host: string) -> int {
+    let parts = host.split(".");
+    let cnt = parts.len();
+    if cnt < 1 or cnt > 4 {
+        return -1;
+    }
+    let nums = [];
+    for raw_p in parts {
+        let v = parse_ipv4_part(string(raw_p));
+        if v < 0 {
+            return -1;
+        }
+        nums.push(v);
+    }
+    if cnt == 1 {
+        return int(nums[0]);
+    }
+    if cnt == 2 {
+        let a = int(nums[0]);
+        let b = int(nums[1]);
+        if a > 255 or b > 16777215 {
+            return -1;
+        }
+        return a * 16777216 + b;
+    }
+    if cnt == 3 {
+        let a = int(nums[0]);
+        let b = int(nums[1]);
+        let c = int(nums[2]);
+        if a > 255 or b > 255 or c > 65535 {
+            return -1;
+        }
+        return a * 16777216 + b * 65536 + c;
+    }
+    let a = int(nums[0]);
+    let b = int(nums[1]);
+    let c = int(nums[2]);
+    let d = int(nums[3]);
+    if a > 255 or b > 255 or c > 255 or d > 255 {
+        return -1;
+    }
+    return a * 16777216 + b * 65536 + c * 256 + d;
+}
+
+fn is_blocked_ipv4_u32(ip: int) -> bool {
+    if ip < 0 {
+        return false;
+    }
+    let o1 = int(ip / 16777216);
+    let rem1 = ip - o1 * 16777216;
+    let o2 = int(rem1 / 65536);
+    let rem2 = rem1 - o2 * 65536;
+    let o3 = int(rem2 / 256);
+    let o4 = rem2 - o3 * 256;
+    if o1 == 0 or o1 == 127 {
+        return true;
+    }
+    if o1 == 169 and o2 == 254 {
+        return true;
+    }
+    if o1 == 100 and o2 == 100 and o3 == 100 and o4 == 200 {
+        return true;
+    }
+    return false;
+}
+
+fn parse_hex_u16(s: string) -> int {
+    let n = s.len();
+    if n == 0 or n > 4 {
+        return -1;
+    }
+    let v = 0;
+    let i = 0;
+    while i < n {
+        let d = hex_val(s[i]);
+        if d < 0 {
+            return -1;
+        }
+        v = v * 16 + d;
+        i += 1;
+    }
+    return v;
+}
+
+fn is_blocked_ipv6_literal(host: string) -> bool {
+    if not host.starts_with("[") or not host.ends_with("]") {
+        return false;
+    }
+    let inner = host.slice(1, host.len() - 1);
+    if inner == "" or inner == "::1" or inner == "::" or inner == "0:0:0:0:0:0:0:1" or inner == "0:0:0:0:0:0:0:0" {
+        return true;
+    }
+    if inner.starts_with("fe8") or inner.starts_with("fe9") or inner.starts_with("fea") or inner.starts_with("feb") {
+        return true;
+    }
+    if inner.starts_with("fc") or inner.starts_with("fd") {
+        return true;
+    }
+    let mapped_tail = "";
+    if inner.starts_with("::ffff:") {
+        mapped_tail = inner.slice(7, inner.len());
+    } elif inner.starts_with("0:0:0:0:0:ffff:") {
+        mapped_tail = inner.slice(15, inner.len());
+    }
+    if mapped_tail != "" {
+        let v4 = decode_ipv4_u32(mapped_tail);
+        if v4 >= 0 and is_blocked_ipv4_u32(v4) {
+            return true;
+        }
+        let colon = mapped_tail.index_of(":");
+        if colon > 0 {
+            let hi = parse_hex_u16(mapped_tail.slice(0, colon));
+            let lo = parse_hex_u16(mapped_tail.slice(colon + 1, mapped_tail.len()));
+            if hi >= 0 and lo >= 0 {
+                if is_blocked_ipv4_u32(hi * 65536 + lo) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+fn is_blocked_http_host(raw_host: string) -> bool {
+    let host = raw_host.trim().lower();
+    while host.ends_with(".") {
+        host = host.slice(0, host.len() - 1);
+    }
+    if host == "" {
+        return true;
+    }
+    if host == "localhost" or host.ends_with(".localhost") {
+        return true;
+    }
+    if host == "metadata" or host == "metadata.google.internal" or host.ends_with(".internal") {
+        return true;
+    }
+    if host.starts_with("[") {
+        return is_blocked_ipv6_literal(host);
+    }
+    let ip_u32 = decode_ipv4_u32(host);
+    if ip_u32 >= 0 {
+        return is_blocked_ipv4_u32(ip_u32);
+    }
+    return false;
+}
+
+fn matches_allowlist(raw_host: string) -> bool {
+    if host_allowlist.len() == 0 {
+        return true;
+    }
+    let host = raw_host.trim().lower();
+    while host.ends_with(".") {
+        host = host.slice(0, host.len() - 1);
+    }
+    for pat in host_allowlist {
+        let p = string(pat);
+        if p == host {
+            return true;
+        }
+        if p.starts_with("*.") and p.len() > 2 {
+            let suffix = p.slice(1, p.len());
+            if host.ends_with(suffix) and host.len() > suffix.len() {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 fn is_safe_http_url(url: string) -> bool {
     let t = url.trim();
     if t == "" {
@@ -35,12 +365,33 @@ fn is_safe_http_url(url: string) -> bool {
     }
     let low = t.lower();
     if low.starts_with("https://") or low.starts_with("http://") {
-        return U.safe_url(t) != "";
+        if U.safe_url(t) == "" {
+            return false;
+        }
+        let host = extract_http_host(low);
+        if is_blocked_http_host(host) {
+            return false;
+        }
+        return matches_allowlist(host);
     }
-    if low.starts_with("/") and not low.starts_with("//") {
+    if low.starts_with("/") and not low.starts_with("//") and not low.starts_with("/\\") {
         return true;
     }
     return false;
+}
+
+/// Public URL safety check enforcing SSRF defenses (including alternate IPv4 encodings) and host allow-list (A-42).
+public fn is_safe_url(url: string) -> bool {
+    return is_safe_http_url(url);
+}
+
+fn next_async_req_id() -> string {
+    let prev = U.ival({
+        "v": state.get_or("__studio_http_seq", 0)
+    }, "v", 0);
+    let next_n = prev + 1;
+    state.set("__studio_http_seq", next_n);
+    return "http" + string(next_n);
 }
 
 fn merge_json_headers(headers: map) -> map {
@@ -55,9 +406,13 @@ fn merge_json_headers(headers: map) -> map {
 
 public fn request(method: string, url: string, headers: map = {
 }, body: string = "") -> map {
+    if not is_safe_http_url(url) {
+        return net_err("blocked unsafe URL");
+    }
+    let clean_url = url.trim();
     let r = null;
     try {
-        r = http_fetch(method, url, headers, body, null);
+        r = http_fetch(method, clean_url, headers, body, null);
     } catch (_e) {
         return net_err("network unavailable in this runtime");
     }
@@ -92,26 +447,26 @@ public fn del(url: string, headers: map = {
 }
 
 /// Dispatch an HTTP request asynchronously.
-/// On web/mobile, enqueues an "http" host effect using cb as a handler sid.
-/// On native desktop, runs request() and invokes cb(response).
+/// On web/mobile (WASM), requires a persistent named handler string (A-40) and enqueues an "http" host effect
+/// with a state-persisted monotonic request id.
+/// On native desktop, runs request() on a background spawn worker and triggers App.request_render() (A-41).
 public fn request_async(method: string, url: string, headers: map = {
 }, body: string = "", cb = null) -> bool {
     if not is_safe_http_url(url) or cb == null {
         return false;
     }
-    async_seq += 1;
-    let req_id = "http" + string(async_seq);
     let clean_url = url.trim();
     if br.platform() != "native" {
-        let cb_sid = "";
-        if type_of(cb) == "string" {
-            cb_sid = string(cb);
-        } else {
-            cb_sid = br.slot(cb);
+        // WASM re-evaluates on every event, so ephemeral closure slots would expire before
+        // the network response returns; require a persistent named handler string (A-40).
+        if type_of(cb) != "string" {
+            return false;
         }
+        let cb_sid = string(cb).trim();
         if cb_sid == "" {
             return false;
         }
+        let req_id = next_async_req_id();
         br.enqueue_effect({
             "kind": "http",
             "req_id": req_id,
@@ -123,26 +478,45 @@ public fn request_async(method: string, url: string, headers: map = {
         });
         return true;
     }
-    let res = request(method, clean_url, headers, body);
-    let ev = {
-        "kind": "http",
-        "req_id": req_id,
-        "ok": res["ok"],
-        "status": res["status"],
-        "body": res["body"],
-        "json": res["json"],
-        "error": res["error"],
-        "response": res,
-        "value": res["body"],
-    };
-    if type_of(cb) == "string" {
-        let h = br.lookup(string(cb));
-        if h != null {
-            h(ev);
+    let req_id = next_async_req_id();
+    let m_up = method;
+    let hdrs = U.deep_copy(headers);
+    let b_str = body;
+    let cb_ref = cb;
+    active_native_requests += 1;
+    appkit.set_bg_busy(true);
+    spawn fn() {
+        let res = request(m_up, clean_url, hdrs, b_str);
+        let ev = {
+            "kind": "http",
+            "req_id": req_id,
+            "ok": res["ok"],
+            "status": res["status"],
+            "body": res["body"],
+            "json": res["json"],
+            "error": res["error"],
+            "response": res,
+            "value": res["body"],
+        };
+        try {
+            if type_of(cb_ref) == "string" {
+                let h = br.lookup(string(cb_ref));
+                if h != null {
+                    h(ev);
+                }
+            } else {
+                cb_ref(ev);
+            }
+        } catch (e) {
+            appkit.report_error("http:" + req_id, string(e), "E_HTTP_CALLBACK", false);
         }
-    } else {
-        cb(ev);
-    }
+        active_native_requests -= 1;
+        if active_native_requests <= 0 {
+            active_native_requests = 0;
+            appkit.set_bg_busy(false);
+        }
+        appkit.request_render();
+    };
     return true;
 }
 

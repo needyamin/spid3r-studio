@@ -2,9 +2,28 @@
 
 **One `.matrix` Codebase. Six Native & Web Platforms. Zero Runtime Dependencies for Built Apps.**
 
-**Spid3r Studio** is a production-ready cross-platform application development environment, declarative UI framework, and **MVC Control Panel GUI** built natively in [Spid3r v1.1.1](https://github.com/needyamin/spid3r/releases/tag/v1.1.1). Build, debug, and ship high-performance apps for **iOS**, **Android**, **Windows**, **macOS**, **Linux**, and **Web / Mobile PWA** from a single `.matrix` source tree — even signing and deploying iOS `.ipa` apps to a real iPhone without a Mac.
+**Spid3r Studio** is a cross-platform application development environment, declarative UI framework, and **MVC Control Panel GUI** built natively in [Spid3r v1.1.1](https://github.com/needyamin/spid3r/releases/tag/v1.1.1). Build and debug apps for **Web / Mobile PWA**, **Windows**, **macOS**, **Linux**, **Android**, and **iOS** from a single `.matrix` source tree — including building and deploying iOS `.ipa` packages to a physical iPhone without a Mac via `xtool`.
+
+> **Current Status & Scope:** Suitable today for **scoped internal pilots (Web / PWA and desktop)** and iOS-without-Mac prototypes. Native store releases (signing/provisioning, encrypted storage, SSO/OIDC callback bridge, and camera/push/BLE plugins) are not yet enterprise-ready — see the capability matrix below.
 
 <img width="1919" height="1028" alt="screenshot-20261124-022815" src="https://github.com/user-attachments/assets/e654cebb-3b59-46cd-b7cb-c259469c76d8" />
+
+---
+
+## Platform Capability Matrix
+
+| Capability | Web / PWA | Android | iOS | Desktop (Win / macOS / Linux) |
+| :--- | :---: | :---: | :---: | :---: |
+| Declarative UI, theming & keyed DOM morph | Yes | Yes | Yes | Yes |
+| Offline launch | Service Worker | Bundled | Bundled | Binary |
+| Hardware back navigation | n/a | Yes | Partial | n/a |
+| Persistent local storage (plaintext JSON / localStorage) | Yes | Yes | Partial* | Yes |
+| Encrypted storage / Keychain / Keystore | No | No | No | No |
+| Clipboard, external URLs, async HTTP | Yes | Yes | Yes | Yes |
+| Camera, file picker, push, deep links, SSO, biometrics | No | No | No | No |
+| Signed store release automation | Manual | Manual | Dev (`xtool`) | Unsigned binary |
+
+*\*Web/Android/iOS bundles ship flattened `.matrix` source evaluated by the WASM runtime; a build-time secret scanner and `spid3r check --deny-warnings` gate run automatically on every build. Never embed credentials in client bundles.*
 
 ---
 

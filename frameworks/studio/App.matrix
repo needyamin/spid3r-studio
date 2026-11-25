@@ -20,14 +20,171 @@ import "CSS" as css;
 import "Storage" as storage;
 import "ClientJS" as client;
 import "Theme" as theme;
+import "I18n" as i18n;
 import "Util" as U;
+import "Errors" as errors;
 
-fn build_error_html(heading: string, detail: string) -> string {
-    br.clear_slots();
-    let h = "<div class=\"page\"><div class=\"card\" style=\"gap:10px;\">"
+const MAX_LOG_ENTRIES = 100;
+let log_ring = [];
+let log_seq = 0;
+let dev_overlay_enabled = false;
+let perf_frames = 0;
+let perf_last_ms = 0;
+let perf_max_ms = 0;
+let perf_total_ms = 0;
+
+fn safe_now_ms() -> int {
+    try {
+        return int(now_ms());
+    } catch (_e) {
+        return 0;
+    }
+}
+
+fn record_frame_ms(elapsed: int) {
+    let ms = if elapsed < 0 {
+        0
+    } else {
+        elapsed
+    };
+    perf_frames += 1;
+    perf_last_ms = ms;
+    perf_total_ms += ms;
+    if ms > perf_max_ms {
+        perf_max_ms = ms;
+    }
+}
+
+/// Toggle dev error overlay with structured diagnostics and log ring tail (A-24).
+public fn set_dev_mode(flag: bool) {
+    dev_overlay_enabled = flag;
+}
+
+/// Whether dev error overlay mode is currently enabled (A-24).
+public fn is_dev_mode() -> bool {
+    return dev_overlay_enabled;
+}
+
+/// Append a structured record to the bounded in-memory log ring buffer (A-24).
+public fn append_log(
+    level: string,
+    source: string,
+    message: string,
+    code: string = ""
+) {
+    log_seq += 1;
+    let rec = {
+        "seq": log_seq,
+        "ts": safe_now_ms(),
+        "level": level,
+        "source": source,
+        "code": code,
+        "message": message,
+    };
+    log_ring.push(rec);
+    if log_ring.len() > MAX_LOG_ENTRIES {
+        let trimmed = [];
+        let start = log_ring.len() - MAX_LOG_ENTRIES;
+        let idx = start;
+        while idx < log_ring.len() {
+            trimmed.push(log_ring[idx]);
+            idx += 1;
+        }
+        log_ring = trimmed;
+    }
+}
+
+public fn log_info(source: string, message: string) {
+    append_log("info", source, message, "");
+}
+
+public fn log_warn(source: string, message: string) {
+    append_log("warn", source, message, "");
+}
+
+public fn log_error(source: string, message: string, code: string = "E_RUNTIME") {
+    append_log("error", source, message, code);
+}
+
+/// Return up to `limit` most recent structured log records as deep copies (A-24).
+public fn recent_logs(limit: int = 50) -> list {
+    let n = log_ring.len();
+    if n == 0 or limit <= 0 {
+        return [];
+    }
+    let start = if limit < n {
+        n - limit
+    } else {
+        0
+    };
+    let out = [];
+    let i = start;
+    while i < n {
+        out.push(U.deep_copy(log_ring[i]));
+        i += 1;
+    }
+    return out;
+}
+
+/// Clear the in-memory log ring buffer (A-24).
+public fn clear_logs() {
+    log_ring = [];
+    log_seq = 0;
+}
+
+/// Return frame render + storage persistence performance metrics (A-03).
+public fn perf_stats() -> map {
+    let avg = if perf_frames > 0 {
+        perf_total_ms / perf_frames
+    } else {
+        0
+    };
+    return {
+        "frames": perf_frames,
+        "last_render_ms": perf_last_ms,
+        "max_render_ms": perf_max_ms,
+        "avg_render_ms": avg,
+        "storage_saves": storage.save_count(),
+    };
+}
+
+/// Reset frame performance counters (A-03).
+public fn reset_perf() {
+    perf_frames = 0;
+    perf_last_ms = 0;
+    perf_max_ms = 0;
+    perf_total_ms = 0;
+}
+
+fn build_error_html(
+    heading: string,
+    detail: string,
+    code: string = "E_RUNTIME",
+    source: string = ""
+) -> string {
+    br.clear_slots_keep_epoch();
+    let h = "<div class=\"page\"><div class=\"card dev-error-card\" style=\"gap:10px;\">"
+    + "<div class=\"row\" style=\"justify-content:space-between;gap:8px;\">"
     + "<div class=\"title\" style=\"color:var(--danger)\">" + U.esc(heading) + "</div>"
-    + "<div class=\"mono\">" + U.esc(detail) + "</div>"
-    + "<div class=\"row\" style=\"gap:8px;margin-top:6px;\">";
+    + "<span class=\"badge danger\">" + U.esc(code) + "</span></div>";
+    if source != "" {
+        h += "<div class=\"caption\">Source: " + U.esc(source) + "</div>";
+    }
+    h += "<div class=\"mono\">" + U.esc(detail) + "</div>";
+    if dev_overlay_enabled {
+        let tail = recent_logs(6);
+        if tail.len() > 0 {
+            h += "<div class=\"dev-log-box\">";
+            for entry in tail {
+                let lv = U.s(entry, "level").upper();
+                let src = U.s(entry, "source");
+                let msg = U.s(entry, "message");
+                h += "<div class=\"mono caption\">[" + U.esc(lv) + "] " + U.esc(src) + ": " + U.esc(msg) + "</div>";
+            }
+            h += "</div>";
+        }
+    }
+    h += "<div class=\"row\" style=\"gap:8px;margin-top:6px;\">";
     if nav.can_pop() {
         h += "<button class=\"btn secondary\" data-tap=\"" + br.slot((_ev) => nav.pop()) + "\">Go Back</button>";
     }
@@ -71,6 +228,19 @@ public fn refresh_theme() {
     }
 }
 
+/// Forward a structured AppError to the mounted App's opt-in on_error hook (A-32).
+public fn report_error(
+    source: string,
+    message: string,
+    code: string = "E_RUNTIME",
+    retryable: bool = false
+) {
+    let a = current();
+    if a != null {
+        a.notify_error(source, message, code, retryable);
+    }
+}
+
 public class App {
     public let app_name;
     public let bundle_id;
@@ -82,6 +252,8 @@ public class App {
     private let data_dir_path;
     private let boot_fn;
     private let ready_fn;
+    private let error_fn;
+    private let deep_link_fn;
     private let in_wasm;
     private let rendered_in_dispatch;
     private let client_ready;
@@ -99,6 +271,8 @@ public class App {
         self.data_dir_path = "storage";
         self.boot_fn = null;
         self.ready_fn = null;
+        self.error_fn = null;
+        self.deep_link_fn = null;
         self.in_wasm = false;
         self.rendered_in_dispatch = false;
         self.client_ready = false;
@@ -145,6 +319,47 @@ public class App {
         return self;
     }
 
+    /// Opt-in crash/error hook: invoked with an AppError whenever a page, handler, boot,
+    /// ready, or render boundary catches an exception (A-32).
+    public fn on_error(self, f) -> App {
+        self.error_fn = f;
+        return self;
+    }
+
+    /// Register a deep-link / OAuth redirect callback handler: fn(ev: map) (A-53).
+    /// Inbound events include `value` (raw URL) and `parsed` ({url, scheme, host, path, query}).
+    public fn on_deep_link(self, f) -> App {
+        self.deep_link_fn = f;
+        return self;
+    }
+
+    /// Enable or disable the dev error overlay with structured log tail (A-24).
+    public fn dev_mode(self, flag: bool = true) -> App {
+        set_dev_mode(flag);
+        return self;
+    }
+
+    /// Notify the opt-in error hook with a structured AppError without crashing the boundary.
+    public fn notify_error(
+        self,
+        source: string,
+        message: string,
+        code: string = "E_RUNTIME",
+        retryable: bool = false
+    ) {
+        log_error(source, message, code);
+        if self.error_fn == null {
+            return;
+        }
+        let err = errors.make(code, message, source, retryable);
+        try {
+            let ef = self.error_fn;
+            ef(err);
+        } catch (_hook_err) {
+            let _ignored = _hook_err;
+        }
+    }
+
     /// REQUIRED for native (desktop/dev) mode: install the entry-file GUI shims.
     /// gui_* natives only link inside the entry file. `studio new` generates them:
     ///
@@ -174,6 +389,25 @@ public class App {
         for (hname, f) in self.handlers {
             br.named_handler(hname, f);
         }
+        if self.deep_link_fn != null {
+            let dl_fn = self.deep_link_fn;
+            br.on_deep_link((ev) => {
+                let raw_u = if ev != null and type_of(ev) == "map" and ev.has("value") and ev["value"] != null {
+                    string(ev["value"])
+                } else {
+                    ""
+                };
+                let parsed = br.parse_deep_link(raw_u);
+                let out_ev = U.deep_copy(ev);
+                if type_of(out_ev) != "map" {
+                    out_ev = {
+                        "sid": "__studio_deep_link__", "kind": "deep_link", "value": raw_u
+                    };
+                }
+                out_ev["parsed"] = parsed;
+                dl_fn(out_ev);
+            });
+        }
         if self.tab_defs.len() > 0 {
             nav.configure(self.tab_defs);
         } else {
@@ -196,6 +430,7 @@ public class App {
         try {
             node = f();
         } catch (e) {
+            self.notify_error("page:" + pname, string(e), "E_PAGE_RENDER", false);
             return build_error_html("Page '" + pname + "' failed", string(e));
         }
         if node == null or type_of(node) != "map" {
@@ -211,6 +446,7 @@ public class App {
             node["pagekey"] = pname;
             return render.document(node, nav.tabs(), nav.tab_index());
         } catch (e) {
+            self.notify_error("render:" + pname, string(e), "E_RENDER", false);
             return build_error_html("Render failed on '" + pname + "'", string(e));
         }
     }
@@ -244,26 +480,37 @@ public class App {
     }
 
     /// Render the current route into the webview (native mode).
+    /// Queues re-entrant render calls via dirty_render instead of dropping frames (A-28).
     public fn render(self) {
         if rendering {
+            dirty_render = true;
             return;
         }
         rendering = true;
-        dirty_render = false;
+        let passes = 0;
         try {
-            br.clear_slots();
-            let html = self.page_html();
-            if not self.in_wasm and self.client_ready {
-                br.eval(
-                    r#"(function(h){if(window.__studio&&window.__studio.patch){window.__studio.patch(h);}else{var r=document.getElementById('spid3r-root')||document.body;if(r){r.innerHTML=h;}}})("#
-                    + json_write(html) + ");"
-                );
-            } else {
-                br.set_html(html);
+            while passes < 4 {
+                dirty_render = false;
+                passes += 1;
+                let t0 = safe_now_ms();
+                br.clear_slots();
+                let html = self.page_html();
+                record_frame_ms(safe_now_ms() - t0);
+                if not self.in_wasm and self.client_ready {
+                    br.eval(
+                        r#"(function(h){if(window.__studio&&window.__studio.patch){window.__studio.patch(h);}else{var r=document.getElementById('spid3r-root')||document.body;if(r){r.innerHTML=h;}}})("#
+                        + json_write(html) + ");"
+                    );
+                } else {
+                    br.set_html(html);
+                }
+                self.flush_native_effects();
+                self.sync_native_poll();
+                self.rendered_in_dispatch = true;
+                if not dirty_render {
+                    break;
+                }
             }
-            self.flush_native_effects();
-            self.sync_native_poll();
-            self.rendered_in_dispatch = true;
         } catch (e) {
             rendering = false;
             throw e;
@@ -313,6 +560,7 @@ public class App {
                     try {
                         self.render();
                     } catch (e) {
+                        self.notify_error("tick_render", string(e), "E_RENDER", true);
                         br.set_html(build_error_html("Render error", string(e)));
                     }
                 } else {
@@ -326,6 +574,7 @@ public class App {
             self.rendered_in_dispatch = false;
             let err = br.dispatch_safe(ev);
             if err != "" {
+                self.notify_error("handler", err, "E_HANDLER", false);
                 br.set_html(build_error_html("Handler error", err));
                 return;
             }
@@ -333,6 +582,7 @@ public class App {
                 try {
                     self.render();
                 } catch (e) {
+                    self.notify_error("render", string(e), "E_RENDER", true);
                     br.set_html(build_error_html("Render error", string(e)));
                 }
             } else {
@@ -346,6 +596,7 @@ public class App {
                     let rf = self.ready_fn;
                     rf();
                 } catch (e) {
+                    self.notify_error("ready", string(e), "E_READY", false);
                     br.set_html(build_error_html("Ready error", string(e)));
                     return;
                 }
@@ -354,6 +605,7 @@ public class App {
                 try {
                     self.render();
                 } catch (e2) {
+                    self.notify_error("ready_render", string(e2), "E_RENDER", true);
                     br.set_html(build_error_html("Render error", string(e2)));
                 }
             } else {
@@ -375,6 +627,9 @@ public class App {
         let err_title = "";
         let err_msg = "";
         let client_tv = 0;
+        let client_html_hash = "";
+        let incoming_nonce = "";
+        let incoming_epoch = 1;
         if ev_json != "" {
             let env = null;
             try {
@@ -395,8 +650,14 @@ public class App {
                 if env.has("storage") and type_of(env["storage"]) == "map" {
                     storage.hydrate(env["storage"]);
                 }
+                if env.has("storage_version") and env["storage_version"] != null {
+                    storage.set_version(U.ival(env, "storage_version", 0));
+                }
                 if env.has("theme") and type_of(env["theme"]) == "map" {
                     theme.restore(env["theme"]);
+                }
+                if env.has("i18n") and type_of(env["i18n"]) == "map" {
+                    i18n.restore(env["i18n"]);
                 }
                 if env.has("theme_version") and env["theme_version"] != null {
                     let tv = U.ival(env, "theme_version", 0);
@@ -405,28 +666,79 @@ public class App {
                         theme.set_version(tv);
                     }
                 }
-                if env.has("event") and type_of(env["event"]) == "map" and env["event"].has("sid") {
-                    let sid = string(env["event"]["sid"]);
-                    if sid == "__studio_back__" {
+                if env.has("html_hash") and env["html_hash"] != null {
+                    client_html_hash = string(env["html_hash"]);
+                }
+                if env.has("slot_nonce") and env["slot_nonce"] != null {
+                    incoming_nonce = string(env["slot_nonce"]).trim();
+                }
+                if env.has("frame_epoch") and env["frame_epoch"] != null {
+                    let fe = U.ival(env, "frame_epoch", 1);
+                    if fe > 0 {
+                        incoming_epoch = fe;
+                    }
+                }
+                if env.has("event") and br.is_valid_event(env["event"]) {
+                    let ev_obj = env["event"];
+                    let sid = string(ev_obj["sid"]);
+                    let flushed_list = [];
+                    if ev_obj.has("flushed") and type_of(ev_obj["flushed"]) == "list" {
+                        for fev in ev_obj["flushed"] {
+                            if br.is_valid_event(fev) {
+                                flushed_list.push(fev);
+                            }
+                        }
+                    }
+                    let needs_slots = sid != "__studio_back__" and sid != "" and not br.has_named(sid);
+                    if not needs_slots {
+                        for fev in flushed_list {
+                            if not br.has_named(string(fev["sid"])) {
+                                needs_slots = true;
+                                break;
+                            }
+                        }
+                    }
+                    if needs_slots {
+                        // Restore the exact previous frame's slot nonce + epoch before regenerating
+                        // closure slots so only authentic current-frame sids match (A-13).
+                        try {
+                            br.clear_slots();
+                            br.set_slot_context(incoming_nonce, incoming_epoch);
+                            let _pre_html = self.page_html();
+                        } catch (_re) {
+                            let _r1 = _re;
+                        }
+                    }
+                    for fev in flushed_list {
+                        let fsid = string(fev["sid"]);
+                        let fh = br.lookup(fsid);
+                        if fh != null {
+                            try {
+                                fh(fev);
+                            } catch (fe) {
+                                err_title = "Handler '" + fsid + "' failed";
+                                err_msg = string(fe);
+                                self.notify_error("handler:" + fsid, err_msg, "E_HANDLER", false);
+                                break;
+                            }
+                        }
+                    }
+                    if err_msg != "" {
+                        had_event = true;
+                    } elif sid == "__studio_back__" {
                         if nav.can_pop() {
                             nav.pop();
                         }
                         had_event = true;
                     } elif sid != "" {
-                        if not br.has_named(sid) {
-                            try {
-                                self.render();
-                            } catch (_re) {
-                                let _ = _re;
-                            }
-                        }
                         let h = br.lookup(sid);
                         if h != null {
                             try {
-                                h(env["event"]);
+                                h(ev_obj);
                             } catch (e) {
                                 err_title = "Handler '" + sid + "' failed";
                                 err_msg = string(e);
+                                self.notify_error("handler:" + sid, err_msg, "E_HANDLER", false);
                             }
                         }
                         had_event = true;
@@ -441,32 +753,58 @@ public class App {
             } catch (e) {
                 err_title = "Boot failed";
                 err_msg = string(e);
+                self.notify_error("boot", err_msg, "E_BOOT", false);
             }
         }
+        let next_epoch = if had_event {
+            incoming_epoch + 1
+        } else {
+            incoming_epoch
+        };
         let html = "";
         let effects = [];
+        let t_render_0 = safe_now_ms();
         if err_msg != "" {
             br.drain_effects();
-            html = build_error_html(err_title, err_msg);
+            br.set_slot_context(incoming_nonce, next_epoch);
+            html = build_error_html(err_title, err_msg, "E_HANDLER", "wasm");
         } else {
             br.clear_slots();
+            br.set_slot_context(incoming_nonce, next_epoch);
             html = self.page_html();
             effects = br.drain_effects();
         }
+        let render_ms = safe_now_ms() - t_render_0;
+        record_frame_ms(render_ms);
         let cur_tv = theme.version();
         let emit_css = "";
         if client_tv == 0 or cur_tv != client_tv {
             emit_css = css.stylesheet();
         }
+        let cur_html_hash = U.fnv_hex(html);
+        let emit_html = if client_html_hash != "" and client_html_hash == cur_html_hash {
+            null
+        } else {
+            html
+        };
         let frame = {
             "css": emit_css,
             "theme_version": cur_tv,
-            "html": html,
+            "storage_version": storage.version(),
+            "html": emit_html,
+            "html_hash": cur_html_hash,
+            "slot_nonce": br.session_nonce(),
+            "frame_epoch": br.slot_epoch_id(),
             "title": self.app_name,
             "router": nav.snapshot(),
             "state": state.snapshot(),
             "storage": storage.all(),
             "theme": theme.snapshot(),
+            "i18n": i18n.snapshot(),
+            "perf": {
+                "render_ms": render_ms
+            }
+            ,
             "effects": effects,
         };
         println("@@STUDIO_FRAME@@");

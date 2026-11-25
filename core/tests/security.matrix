@@ -9,6 +9,11 @@ import "studio/CSS" as css;
 import "studio/Theme" as theme;
 import "studio/Bridge" as br;
 import "studio/Http" as http;
+import "core/Diagnostics" as diag;
+import "core/cli/Manifest" as man;
+import "core/cli/BuildWeb" as b_web;
+import "core/cli/DevWeb" as dev_web;
+import "core/cli/Exec" as ex;
 
 let passed = 0;
 let failed = 0;
@@ -121,7 +126,331 @@ fn main() -> int {
         check_ok(w.contains("Content-Security-Policy"), "wasmhost defines CSP");
         check_ok(w.contains("worker-src 'self'"), "wasmhost permits local worker");
         check_ok(w.contains("object-src 'none'"), "wasmhost blocks object-src");
+        check_ok(not w.contains("http:"), "A-31 wasmhost CSP drops cleartext http:");
     }
+
+    // 6. A-11: Raw style prop sanitization
+    let bad_style_html = render.node_html(ui.row([ui.text("x")], {
+        "style": "color:red;background:url(https://evil.test/x);width:expression(alert(1));@import url(y);}body{display:none"
+    }));
+    check_ok(
+        bad_style_html.contains("color:red;") and not bad_style_html.contains("url(") and not bad_style_html.contains("expression(") and not bad_style_html.contains("body{display:none"),
+        "A-11 Render style prop sanitizes CSS injection while preserving safe declarations"
+    );
+
+    // 7. A-12: ui.html() allow-list sanitizer blocks scripts/handlers while keeping safe SVG icons
+    let dirty_html = "<script>alert(1)</script><img src=x onerror=alert(2)><svg onload=\"alert(3)\" viewBox=\"0 0 24 24\"><path d=\"M0 0\"/></svg><a href=\"javascript:alert(4)\" onclick=\"bad()\">Link</a>";
+    let clean_html = render.node_html(ui.html(dirty_html));
+    check_ok(
+        not clean_html.contains("<script") and not clean_html.contains("onerror") and not clean_html.contains("onload") and not clean_html.contains("onclick") and not clean_html.contains("javascript:"),
+        "A-12 ui.html strips script tags, inline event handlers, and javascript URLs"
+    );
+    check_ok(
+        clean_html.contains("<svg viewBox=\"0 0 24 24\"><path d=\"M0 0\"/></svg>"),
+        "A-12 ui.html preserves safe inline SVG icons"
+    );
+
+    // 8. A-13: Event bridge authenticated slot IDs, epoch invalidation, and shape validation
+    br.reset();
+    let hit_cnt = 0;
+    let sid1 = br.slot((_ev) => {
+        hit_cnt += 1;
+    });
+    check_ok(
+        sid1.starts_with("f_") and sid1 != "f1",
+        "A-13 closure slot uses per-session nonce + epoch prefix"
+    );
+    br.dispatch({
+        "sid": sid1, "kind": "tap"
+    });
+    check_eq(hit_cnt, 1, "A-13 authentic current-frame slot dispatches");
+    br.clear_slots();
+    br.dispatch({
+        "sid": sid1, "kind": "tap"
+    });
+    check_eq(hit_cnt, 1, "A-13 stale slot from previous frame is rejected");
+    check_ok(not br.is_valid_event({
+        "sid": 123
+    }), "A-13 rejects non-string sid");
+    check_ok(not br.is_valid_event({
+        "sid": "ok", "kind": 99
+    }), "A-13 rejects non-string kind");
+    check_ok(not br.is_valid_event({
+        "sid": ""
+    }), "A-13 rejects empty sid");
+    br.reset();
+
+    // 9. A-42: Synchronous Http.request() validates URLs before http_fetch
+    for bad_sync in [
+    "file:///etc/passwd",
+    "javascript:alert(1)",
+    "data:text/html,hi",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://127.0.0.1:8080/admin",
+    "http://localhost/internal",
+    "http://[::1]/secret",
+    "http://[fd00:ec2::254]/latest/meta-data/",
+    "/\\evil.com",
+    ] {
+        let rr = http.get(bad_sync);
+        check_ok(
+            rr["ok"] == false and string(rr["error"]).contains("blocked unsafe URL"),
+            "A-42 Http.get blocks " + bad_sync
+        );
+    }
+
+    // Additional sanitizer hardening checks (entity URLs, backslash URLs, CSS image-set, slash-delimited script)
+    check_eq(
+        U.safe_url("&#106;avascript:alert(1)"),
+        "",
+        "safe_url blocks HTML-entity javascript scheme"
+    );
+    check_eq(U.safe_url("/\\evil.com"), "", "safe_url blocks backslash protocol-relative URL");
+    check_eq(
+        U.esc_style("background: image-set(\"https://evil.com\" 1x)"),
+        "",
+        "A-11 esc_style blocks CSS image-set() exfiltration"
+    );
+    check_eq(
+        U.esc_css_val("expression (alert(1))"),
+        "",
+        "A-11 esc_css_val blocks whitespace-obfuscated expression()"
+    );
+    check_eq(
+        U.sanitize_html("<script/x>alert(1)</script>"),
+        "",
+        "A-12 sanitize_html drops body of slash-delimited script tag"
+    );
+    check_ok(
+        not U.sanitize_html("<a href=\"data:image/png;base64,AAA\">x</a>").contains("data:"),
+        "A-12 sanitize_html strips data: URI from <a href>"
+    );
+
+    // 10. A-43: Strict reverse-DNS bundleID validation
+    check_ok(
+        man.is_valid_bundle_id("sh.appstudio.demo"),
+        "A-43 accepts valid reverse-DNS bundleID"
+    );
+    check_ok(
+        not man.is_valid_bundle_id("com.evil\"\nkey: injected"),
+        "A-43 rejects quote/newline injection in bundleID"
+    );
+    check_ok(not man.is_valid_bundle_id("singleword"), "A-43 rejects single-segment bundleID");
+    check_ok(not man.is_valid_bundle_id("com.1bad.app"), "A-43 rejects digit-leading segment");
+
+    // 11. A-49: Build-time secret scanner detects hardcoded keys and passes clean bundles
+    let fake_aws = "let k = \"AKIA" + "0123456789ABCDEF\";";
+    let fake_gh = "let t = \"ghp_" + "abcdefghijklmnopqrstuvwxyz123456\";";
+    let fake_st = "let s = \"sk_live_" + "0123456789abcdef1234\";";
+    let fake_pem = "let p = \"-----BEGIN RSA " + "PRIVATE KEY-----\";";
+    check_ok(
+        b_web.scan_secrets(fake_aws).len() > 0,
+        "A-49 secret scanner catches AWS AKIA key"
+    );
+    check_ok(
+        b_web.scan_secrets(fake_gh).len() > 0,
+        "A-49 secret scanner catches GitHub ghp_ token"
+    );
+    check_ok(
+        b_web.scan_secrets(fake_st).len() > 0,
+        "A-49 secret scanner catches Stripe sk_live_ key"
+    );
+    check_ok(
+        b_web.scan_secrets(fake_pem).len() > 0,
+        "A-49 secret scanner catches PEM private key"
+    );
+    let cert_then_key = "let c = \"-----BEGIN CERTIFICATE-----\\nAA\\n-----END CERTIFICATE-----\";\nlet k = \"-----BEGIN RSA " + "PRIVATE KEY-----\";";
+    check_ok(
+        b_web.scan_secrets(cert_then_key).len() > 0,
+        "A-49 secret scanner catches PEM private key appearing after a PEM certificate"
+    );
+    check_eq(
+        b_web.scan_secrets("let title = \"Hello AppStudio\";").len(),
+        0,
+        "A-49 secret scanner passes clean source"
+    );
+
+    // 12. A-36: Diagnostics ordering and BUG-09 guidance
+    let bug09_sug = diag.suggestion_for_message("variable '_' is already declared in this scope");
+    check_ok(bug09_sug.contains("BUG-09"), "A-36 Diagnostics maps duplicate '_' to BUG-09");
+    let unused_sug = diag.suggestion_for_message("unused variable 'foo'");
+    check_ok(
+        not unused_sug.contains("let _ = x;"),
+        "A-36 Diagnostics unused-variable advice does not recommend 'let _ = x;'"
+    );
+
+    // 13. A-42: Alternate IPv4 encodings (decimal/hex/octal/shorthand), IPv6-mapped hex, and host allow-list
+    for bad_alt in [
+    "http://2130706433/secret",
+    "http://0x7f000001/secret",
+    "http://0177.0.0.1/secret",
+    "http://017700000001/secret",
+    "http://127.1/secret",
+    "http://0x7f.1/secret",
+    "http://2852039166/latest/meta-data/",
+    "http://0xa9fea9fe/latest/meta-data/",
+    "http://0/internal",
+    "http://localhost./admin",
+    "http://metadata.google.internal./computeMetadata/v1/",
+    "http://[::ffff:7f00:1]/secret",
+    "http://[::ffff:a9fe:a9fe]/latest/meta-data/",
+    "http://[fe80::1]/link-local",
+    ] {
+        check_ok(
+            not http.is_safe_url(bad_alt),
+            "A-42 blocks alternate SSRF encoding " + bad_alt
+        );
+        let rr_alt = http.get(bad_alt);
+        check_ok(
+            rr_alt["ok"] == false and string(rr_alt["error"]).contains("blocked unsafe URL"),
+            "A-42 Http.get rejects " + bad_alt
+        );
+    }
+    check_ok(
+        http.is_safe_url("https://api.example.com/v1"),
+        "A-42 allows public HTTPS when allow-list unset"
+    );
+    http.allow_hosts(["api.example.com", "*.trusted.io"]);
+    check_ok(
+        http.is_safe_url("https://api.example.com/v1"),
+        "A-42 allow-list permits exact host match"
+    );
+    check_ok(
+        http.is_safe_url("https://sub.trusted.io/data"),
+        "A-42 allow-list permits wildcard subdomain match"
+    );
+    check_ok(
+        not http.is_safe_url("https://evil.example.org/steal"),
+        "A-42 allow-list blocks unlisted host"
+    );
+    check_ok(
+        not http.is_safe_url("https://trusted.io/apex"),
+        "A-42 wildcard *.trusted.io does not match bare apex"
+    );
+    check_ok(
+        http.is_safe_url("/api/local"),
+        "A-42 allow-list still allows relative same-origin path"
+    );
+    http.allow_hosts(["127.0.0.1", "localhost"]);
+    check_ok(
+        not http.is_safe_url("http://127.0.0.1/admin"),
+        "A-42 SSRF block-list overrides allow-list for loopback"
+    );
+    http.clear_allowed_hosts();
+    check_eq(http.allowed_hosts().len(), 0, "A-42 clear_allowed_hosts resets allow-list");
+
+    // 14. A-51: enum lint warning & diagnostics rule
+    let enum_src = "public enum Color {\n    Red,\n    Green,\n}\n";
+    check_eq(
+        b_web.scan_unsupported_enums(enum_src).len(),
+        1,
+        "A-51 BuildWeb.scan_unsupported_enums flags top-level enum"
+    );
+    check_eq(
+        b_web.scan_unsupported_enums("// enum Commented { A }\nlet s = \"enum InStr\";\n").len(),
+        0,
+        "A-51 scan_unsupported_enums ignores comments and strings"
+    );
+    let enum_warns = diag.lint_unsupported_enums(enum_src, "demo.matrix");
+    check_eq(enum_warns.len(), 1, "A-51 Diagnostics.lint_unsupported_enums emits warning");
+    check_ok(
+        diag.suggestion_for_message("unknown name from enum").contains("A-51"),
+        "A-51 Diagnostics provides enum guidance"
+    );
+
+    // 15. A-14: Supply-chain SHA-256 verification and catalog digest lookup
+    let xtool_sha = ex.catalog_sha256("xtool-ios", "x86_64");
+    check_eq(xtool_sha.len(), 64, "A-14 catalog.json pins 64-hex SHA-256 for xtool-ios x86_64");
+    let cat_hash = ex.sha256_file("downloads/packages/catalog.json");
+    check_eq(cat_hash.len(), 64, "A-14 Exec.sha256_file computes 64-hex digest");
+    check_ok(
+        ex.verify_sha256("downloads/packages/catalog.json", cat_hash, "catalog.json"),
+        "A-14 verify_sha256 passes on matching digest"
+    );
+    check_ok(
+        not ex.verify_sha256(
+            "downloads/packages/catalog.json",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "catalog.json"
+        ),
+        "A-14 verify_sha256 rejects mismatched digest"
+    );
+
+    // 16. A-31, A-53, A-14, A-23: Per-app CSP tightening, URL scheme sanitization, SBOM & DevWeb live-reload
+    let sec_tmp = "_test_sec_h2b";
+    dir_remove(sec_tmp);
+    dir_create(sec_tmp);
+    write_file(sec_tmp + "/studio.json", json_write({
+        "name": "SecFixture",
+        "bundleID": "sh.test.secfix",
+        "version": "2.1.0",
+        "deepLinks": ["myapp", "javascript", "https", "bad scheme!", "my.app+v2://"],
+        "auth": {
+            "redirectScheme": "myauth"
+        }
+        ,
+        "security": {
+            "connectSrc": ["https://api.myapp.example", "bad;injected", "wss://rt.myapp.example"]
+        }
+        ,
+    }));
+    let schemes = man.app_url_schemes_of(sec_tmp);
+    check_eq(schemes.len(), 3, "A-53 app_url_schemes_of keeps only valid custom schemes");
+    check_ok(
+        schemes[0] == "myapp" and schemes[1] == "my.app+v2" and schemes[2] == "myauth",
+        "A-53 app_url_schemes_of normalizes and rejects http/https/javascript/invalid schemes"
+    );
+
+    let csp_dev = man.build_wasm_csp(sec_tmp, false);
+    let csp_rel = man.build_wasm_csp(sec_tmp, true);
+    check_ok(
+        csp_dev.contains(
+            "connect-src 'self' appstudio: https://api.myapp.example wss://rt.myapp.example;"
+        ) and not csp_dev.contains("bad;injected") and not csp_dev.contains(" http:"),
+        "A-31 per-app CSP connect-src applies configured origins, blocks injection, omits http:"
+    );
+    check_ok(
+        csp_rel.contains("upgrade-insecure-requests;"),
+        "A-31 release CSP enables upgrade-insecure-requests"
+    );
+
+    check_ok(
+        man.emit_sbom(sec_tmp, sec_tmp, "android", true),
+        "A-14 emit_sbom writes CycloneDX sbom.json"
+    );
+    let sbom_r = read_file(sec_tmp + "/sbom.json");
+    let sbom_obj = if sbom_r.is_ok() {
+        json_parse(string(sbom_r.unwrap()))
+    } else {
+        {
+        }
+    };
+    check_ok(
+        sbom_obj.has("bomFormat") and string(sbom_obj["bomFormat"]) == "CycloneDX" and sbom_obj.has("components") and sbom_obj["components"].len() >= 4,
+        "A-14 sbom.json is valid CycloneDX 1.5 with framework and target components"
+    );
+
+    check_ok(
+        dev_web.write_reload_version(sec_tmp, "7") and dev_web.read_reload_version(sec_tmp) == "7",
+        "A-23 DevWeb persists and reads reload version token"
+    );
+    let injected = dev_web.inject_livereload_html("<html><body><div/></body></html>");
+    check_ok(
+        injected.contains("<script src=\"/__studio_livereload.js\"></script>\n</body>"),
+        "A-23 DevWeb injects dev-only live-reload script before </body>"
+    );
+    check_eq(dev_web.utf8_byte_len("abc"), 3, "DevWeb utf8_byte_len counts ASCII bytes");
+    check_eq(
+        dev_web.utf8_byte_len("—…"),
+        6,
+        "DevWeb utf8_byte_len counts 3-byte UTF-8 punctuation accurately (no HTTP truncation)"
+    );
+    check_eq(
+        dev_web.utf8_byte_len("a—é😀"),
+        10,
+        "DevWeb utf8_byte_len handles 1/2/3/4-byte UTF-8 sequences"
+    );
+    dir_remove(sec_tmp);
 
     println("security passed: " + string(passed) + "  failed: " + string(failed));
     if failed > 0 {

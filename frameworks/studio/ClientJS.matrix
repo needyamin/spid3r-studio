@@ -12,6 +12,13 @@ public fn runtime_js() -> string {
   var lastPageKey = null;
   var caretState = null;
   var pollTimer = null;
+  var modalReturnEl = null;
+  var activeModalEl = null;
+  var pendingAuth = null;
+  var nativeSeq = 0;
+  var nativeCallbacks = Object.create(null);
+  var webCryptoKeyPromise = null;
+  var memSecStore = Object.create(null);
 
   function cssEsc(s) {
     s = String(s || '');
@@ -41,7 +48,8 @@ public fn runtime_js() -> string {
     }
   }
 
-  function flushInputs() {
+  function drainPendingInputs() {
+    var flushed = [];
     var sids = Object.keys(pendingInputs);
     for (var i = 0; i < sids.length; i++) {
       var sid = sids[i];
@@ -49,8 +57,24 @@ public fn runtime_js() -> string {
       if (!entry) { continue; }
       clearTimeout(entry.timer);
       delete pendingInputs[sid];
-      postUi(entry.payload);
+      flushed.push(entry.payload);
     }
+    return flushed;
+  }
+
+  function flushInputs() {
+    var flushed = drainPendingInputs();
+    for (var i = 0; i < flushed.length; i++) {
+      postUi(flushed[i]);
+    }
+  }
+
+  function postUiWithFlush(payload) {
+    var flushed = drainPendingInputs();
+    if (flushed.length > 0 && payload && typeof payload === 'object') {
+      payload.flushed = flushed;
+    }
+    postUi(payload);
   }
 
   function isSafeOpenUrl(u) {
@@ -325,9 +349,64 @@ public fn runtime_js() -> string {
     return box;
   }
 
+  function isFocusable(el) {
+    if (!el || el.nodeType !== 1) { return false; }
+    if (el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true') { return false; }
+    var ti = el.getAttribute('tabindex');
+    if (ti !== null && String(ti) === '-1') { return false; }
+    var tag = el.tagName;
+    if (tag === 'BUTTON' || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') { return true; }
+    if (tag === 'A' && el.hasAttribute('href')) { return true; }
+    if (ti !== null && String(ti) !== '') { return true; }
+    return false;
+  }
+
+  function getFocusableElements(container) {
+    var out = [];
+    if (!container) { return out; }
+    function walk(node) {
+      var kids = node.childNodes || [];
+      for (var i = 0; i < kids.length; i++) {
+        var c = kids[i];
+        if (c && c.nodeType === 1) {
+          if (isFocusable(c)) { out.push(c); }
+          walk(c);
+        }
+      }
+    }
+    walk(container);
+    return out;
+  }
+
+  function findAncestor(node, pred) {
+    var cur = node;
+    while (cur && cur.nodeType === 1) {
+      if (pred(cur)) { return cur; }
+      cur = cur.parentNode;
+    }
+    return null;
+  }
+
+  function isRtlElement(el) {
+    var cur = el;
+    while (cur && cur.nodeType === 1) {
+      var d = cur.getAttribute('dir');
+      if (d) { return String(d).toLowerCase() === 'rtl'; }
+      cur = cur.parentNode;
+    }
+    return false;
+  }
+
+  function findOpenDialog(root) {
+    if (!root || !root.querySelector) { return null; }
+    return root.querySelector('[role="dialog"][aria-modal="true"]');
+  }
+
   function patch(html, targetRoot) {
     var root = targetRoot || document.getElementById('spid3r-root') || document.body;
     if (!root) { return; }
+    var prevActive = document.activeElement;
+    var hadDialog = !!findOpenDialog(root);
     var activeRec = captureActive(root) || caretState;
     var incoming = parseHtml(html);
     if (!incoming) {
@@ -340,17 +419,41 @@ public fn runtime_js() -> string {
 
     morphChildren(root, incoming);
 
+    var curDialog = findOpenDialog(root);
     var curPage = root.querySelector ? root.querySelector('.page[data-pagekey]') : null;
     if (nextKey !== null) {
       lastPageKey = nextKey;
     }
+
+    // A-30: Modal dialog/sheet focus trap entry & focus restore on close
+    if (!hadDialog && curDialog) {
+      modalReturnEl = (prevActive && root.contains(prevActive)) ? prevActive : (activeRec ? activeRec.el : null);
+      activeModalEl = curDialog;
+      var focusables = getFocusableElements(curDialog);
+      var firstTarget = focusables.length > 0 ? focusables[0] : curDialog;
+      try {
+        if (firstTarget && typeof firstTarget.focus === 'function') {
+          firstTarget.focus({ preventScroll: true });
+        }
+      } catch (_fe) {}
+    } else if (hadDialog && !curDialog) {
+      var restoreEl = modalReturnEl;
+      modalReturnEl = null;
+      activeModalEl = null;
+      if (restoreEl && root.contains(restoreEl) && typeof restoreEl.focus === 'function') {
+        try { restoreEl.focus({ preventScroll: true }); } catch (_re) {}
+      }
+    } else if (curDialog) {
+      activeModalEl = curDialog;
+    }
+
     if (routeChanged && curPage) {
       curPage.scrollTop = 0;
       curPage.classList.add('page-enter');
       setTimeout(function() {
         if (curPage && curPage.classList) { curPage.classList.remove('page-enter'); }
       }, 280);
-    } else if (!routeChanged && activeRec) {
+    } else if (!routeChanged && activeRec && ((!curDialog && !hadDialog) || (curDialog && hadDialog))) {
       restoreActive(root, activeRec);
     }
   }
@@ -369,6 +472,207 @@ public fn runtime_js() -> string {
     } catch (_e) {}
   }
 
+  function bytesToB64(bytes) {
+    var bin = '';
+    for (var i = 0; i < bytes.length; i++) {
+      bin += String.fromCharCode(bytes[i]);
+    }
+    if (typeof btoa === 'function') { return btoa(bin); }
+    if (typeof Buffer !== 'undefined') { return Buffer.from(bytes).toString('base64'); }
+    return bin;
+  }
+
+  function b64ToBytes(b64) {
+    if (typeof atob === 'function') {
+      var bin = atob(String(b64 || ''));
+      var out = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) { out[i] = bin.charCodeAt(i); }
+      return out;
+    }
+    if (typeof Buffer !== 'undefined') {
+      return new Uint8Array(Buffer.from(String(b64 || ''), 'base64'));
+    }
+    return new Uint8Array(0);
+  }
+
+  function openKeyDb() {
+    return new Promise(function(resolve) {
+      if (typeof indexedDB === 'undefined') { resolve(null); return; }
+      try {
+        var req = indexedDB.open('studio_sec_keys_v1', 1);
+        req.onupgradeneeded = function() {
+          try { req.result.createObjectStore('keys'); } catch (_e) {}
+        };
+        req.onsuccess = function() { resolve(req.result); };
+        req.onerror = function() { resolve(null); };
+      } catch (_e2) {
+        resolve(null);
+      }
+    });
+  }
+
+  function getWebCryptoKey() {
+    if (webCryptoKeyPromise) { return webCryptoKeyPromise; }
+    webCryptoKeyPromise = (async function() {
+      if (typeof crypto === 'undefined' || !crypto.subtle) {
+        throw new Error('WebCrypto unavailable');
+      }
+      var db = await openKeyDb();
+      if (db) {
+        var existing = await new Promise(function(resolve) {
+          try {
+            var tx = db.transaction('keys', 'readonly');
+            var gr = tx.objectStore('keys').get('master');
+            gr.onsuccess = function() { resolve(gr.result || null); };
+            gr.onerror = function() { resolve(null); };
+          } catch (_e) { resolve(null); }
+        });
+        if (existing) { return existing; }
+      }
+      var key = await crypto.subtle.generateKey(
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt']
+      );
+      if (db) {
+        await new Promise(function(resolve) {
+          try {
+            var tx2 = db.transaction('keys', 'readwrite');
+            tx2.objectStore('keys').put(key, 'master');
+            tx2.oncomplete = function() { resolve(true); };
+            tx2.onerror = function() { resolve(false); };
+          } catch (_e2) { resolve(false); }
+        });
+      }
+      return key;
+    })();
+    return webCryptoKeyPromise;
+  }
+
+  function secSlotKey(k) {
+    return 'studio:sec:' + String(k || '');
+  }
+
+  function readSecRaw(k) {
+    var sk = secSlotKey(k);
+    try {
+      if (typeof localStorage !== 'undefined') {
+        return localStorage.getItem(sk);
+      }
+    } catch (_e) {}
+    return Object.prototype.hasOwnProperty.call(memSecStore, sk) ? memSecStore[sk] : null;
+  }
+
+  function writeSecRaw(k, v) {
+    var sk = secSlotKey(k);
+    try {
+      if (typeof localStorage !== 'undefined') {
+        if (v === null) { localStorage.removeItem(sk); }
+        else { localStorage.setItem(sk, String(v)); }
+        return;
+      }
+    } catch (_e) {}
+    if (v === null) { delete memSecStore[sk]; }
+    else { memSecStore[sk] = String(v); }
+  }
+
+  async function webCryptoSet(k, val) {
+    var key = await getWebCryptoKey();
+    var iv = new Uint8Array(12);
+    crypto.getRandomValues(iv);
+    var enc = new TextEncoder().encode(String(val));
+    var ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, enc);
+    writeSecRaw(k, JSON.stringify({ v: 1, iv: bytesToB64(iv), ct: bytesToB64(new Uint8Array(ct)) }));
+  }
+
+  async function webCryptoGet(k) {
+    var raw = readSecRaw(k);
+    if (!raw) { return null; }
+    var parsed = JSON.parse(raw);
+    if (!parsed || !parsed.iv || !parsed.ct) { return null; }
+    var key = await getWebCryptoKey();
+    var pt = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: b64ToBytes(parsed.iv) },
+      key,
+      b64ToBytes(parsed.ct)
+    );
+    return new TextDecoder().decode(pt);
+  }
+
+  function callIosNative(action, payload, cbFn) {
+    var handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.studioNative;
+    if (!handler || typeof handler.postMessage !== 'function') { return false; }
+    var reqId = 'nat_' + (++nativeSeq);
+    if (typeof cbFn === 'function') {
+      nativeCallbacks[reqId] = cbFn;
+    }
+    handler.postMessage({ id: reqId, action: action, payload: payload || {} });
+    return true;
+  }
+
+  var prevNativeCallback = window.__studioNativeCallback;
+  window.__studioNativeCallback = function(reqId, result) {
+    var fn = nativeCallbacks[reqId];
+    if (fn) {
+      delete nativeCallbacks[reqId];
+      try { fn(result); } catch (_e) {}
+      return;
+    }
+    if (typeof prevNativeCallback === 'function') {
+      try { prevNativeCallback(reqId, result); } catch (_e2) {}
+    }
+  };
+
+  function postSecureResult(cb, key, ok, value, err) {
+    if (!cb) { return; }
+    var res = { ok: !!ok, key: String(key || ''), value: value === null || value === undefined ? '' : String(value), found: value !== null && value !== undefined, error: String(err || '') };
+    postUi({
+      sid: cb,
+      kind: 'secure_store',
+      key: res.key,
+      value: res.value,
+      arg: JSON.stringify(res),
+      ok: res.ok,
+      found: res.found,
+      error: res.error
+    });
+  }
+
+  function isSafeDeepLinkUrl(u) {
+    var s = String(u || '').trim();
+    if (!s) { return false; }
+    var idx = s.indexOf('://');
+    if (idx <= 0) { return false; }
+    var sch = s.slice(0, idx).toLowerCase();
+    if (sch === 'javascript' || sch === 'data' || sch === 'vbscript' || sch === 'file') { return false; }
+    return /^[a-z][a-z0-9+.-]*$/.test(sch);
+  }
+
+  function dispatchDeepLink(rawUrl) {
+    if (!isSafeDeepLinkUrl(rawUrl)) { return false; }
+    var clean = String(rawUrl).trim();
+    var sch = clean.slice(0, clean.indexOf('://')).toLowerCase();
+    postUi({
+      sid: '__studio_deep_link__',
+      kind: 'deep_link',
+      value: clean,
+      arg: clean
+    });
+    if (pendingAuth && pendingAuth.cb && (!pendingAuth.scheme || pendingAuth.scheme === sch)) {
+      var authCb = pendingAuth.cb;
+      pendingAuth = null;
+      postUi({
+        sid: authCb,
+        kind: 'auth',
+        value: clean,
+        arg: clean
+      });
+    }
+    return true;
+  }
+
+  window.__studioDeepLink = dispatchDeepLink;
+
   function runEffects(effects) {
     if (!Array.isArray(effects) || effects.length === 0) { return; }
     for (var i = 0; i < effects.length; i++) {
@@ -384,15 +688,143 @@ public fn runtime_js() -> string {
           copyFallback(txt);
         }
       } else if (kind === 'open_url') {
-        var url = String(ef.url || '');
-        if (isSafeOpenUrl(url) && typeof window.open === 'function') {
-          try { window.open(url, '_blank', 'noopener,noreferrer'); } catch (_e) {}
+        var url = String(ef.url || '').trim();
+        if (isSafeOpenUrl(url)) {
+          if (!callIosNative('open_url', { url: url }, null)) {
+            if (window.StudioAndroid && typeof window.StudioAndroid.openUrl === 'function') {
+              try { window.StudioAndroid.openUrl(url); } catch (_oe) {}
+            } else if (typeof window.open === 'function') {
+              try { window.open(url, '_blank', 'noopener,noreferrer'); } catch (_e) {}
+            }
+          }
         }
       } else if (kind === 'haptic') {
         var style = String(ef.style || 'light');
-        var ms = (style === 'heavy') ? 35 : ((style === 'medium') ? 20 : 10);
-        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-          try { navigator.vibrate(ms); } catch (_e2) {}
+        if (!callIosNative('haptic', { style: style }, null)) {
+          var ms = (style === 'heavy') ? 35 : ((style === 'medium') ? 20 : 10);
+          if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+            try { navigator.vibrate(ms); } catch (_e2) {}
+          }
+        }
+      } else if (kind === 'secure_store.set') {
+        (function(req) {
+          var sk = String(req.key || '');
+          var sv = String(req.value || '');
+          var cb = String(req.cb || '');
+          if (!sk) { return; }
+          if (callIosNative('secure_set', { key: sk, value: sv }, function(res) {
+            postSecureResult(cb, sk, res && res.ok, sv, res && res.error);
+          })) { return; }
+          if (window.StudioAndroid && typeof window.StudioAndroid.secureSet === 'function') {
+            try {
+              var okA = !!window.StudioAndroid.secureSet(sk, sv);
+              postSecureResult(cb, sk, okA, sv, okA ? '' : 'android keystore set failed');
+            } catch (ea) {
+              postSecureResult(cb, sk, false, '', ea && ea.message ? ea.message : String(ea));
+            }
+            return;
+          }
+          webCryptoSet(sk, sv).then(function() {
+            postSecureResult(cb, sk, true, sv, '');
+          }).catch(function(ew) {
+            postSecureResult(cb, sk, false, '', ew && ew.message ? ew.message : String(ew));
+          });
+        })(ef);
+      } else if (kind === 'secure_store.get') {
+        (function(req) {
+          var sk = String(req.key || '');
+          var cb = String(req.cb || '');
+          if (!sk || !cb) { return; }
+          if (callIosNative('secure_get', { key: sk }, function(res) {
+            postSecureResult(cb, sk, res && res.ok, res ? res.value : null, res && res.error);
+          })) { return; }
+          if (window.StudioAndroid && typeof window.StudioAndroid.secureGet === 'function') {
+            try {
+              var valA = window.StudioAndroid.secureGet(sk);
+              postSecureResult(cb, sk, true, valA, '');
+            } catch (ea) {
+              postSecureResult(cb, sk, false, null, ea && ea.message ? ea.message : String(ea));
+            }
+            return;
+          }
+          webCryptoGet(sk).then(function(val) {
+            postSecureResult(cb, sk, true, val, '');
+          }).catch(function(ew) {
+            postSecureResult(cb, sk, false, null, ew && ew.message ? ew.message : String(ew));
+          });
+        })(ef);
+      } else if (kind === 'secure_store.remove') {
+        (function(req) {
+          var sk = String(req.key || '');
+          var cb = String(req.cb || '');
+          if (!sk) { return; }
+          if (callIosNative('secure_remove', { key: sk }, function(res) {
+            postSecureResult(cb, sk, res && res.ok, null, res && res.error);
+          })) { return; }
+          if (window.StudioAndroid && typeof window.StudioAndroid.secureRemove === 'function') {
+            try {
+              window.StudioAndroid.secureRemove(sk);
+              postSecureResult(cb, sk, true, null, '');
+            } catch (ea) {
+              postSecureResult(cb, sk, false, null, ea && ea.message ? ea.message : String(ea));
+            }
+            return;
+          }
+          writeSecRaw(sk, null);
+          postSecureResult(cb, sk, true, null, '');
+        })(ef);
+      } else if (kind === 'share') {
+        var shTitle = String(ef.title || '');
+        var shText = String(ef.text || '');
+        var shUrl = String(ef.url || '');
+        if (shUrl && !isSafeOpenUrl(shUrl)) { continue; }
+        if (!callIosNative('share', { title: shTitle, text: shText, url: shUrl }, null)) {
+          if (window.StudioAndroid && typeof window.StudioAndroid.share === 'function') {
+            try { window.StudioAndroid.share(shTitle, shText, shUrl); } catch (_se) {}
+          } else if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+            try { navigator.share({ title: shTitle, text: shText, url: shUrl || undefined }).catch(function() {}); } catch (_se2) {}
+          }
+        }
+      } else if (kind === 'files.pick') {
+        (function(req) {
+          var fcb = String(req.cb || '');
+          if (!fcb || typeof document === 'undefined' || !document.createElement) { return; }
+          try {
+            var inp = document.createElement('input');
+            inp.setAttribute('type', 'file');
+            inp.setAttribute('accept', String(req.accept || '*/*'));
+            inp.style.display = 'none';
+            inp.onchange = function() {
+              var f = inp.files && inp.files[0];
+              if (!f) { return; }
+              var sendMeta = function(txt) {
+                var meta = { name: String(f.name || ''), size: Number(f.size || 0), type: String(f.type || ''), text: txt };
+                postUi({ sid: fcb, kind: 'file', value: meta.name, arg: JSON.stringify(meta), file: meta });
+              };
+              if (typeof f.text === 'function') {
+                f.text().then(sendMeta).catch(function() { sendMeta(''); });
+              } else {
+                sendMeta('');
+              }
+            };
+            if (document.body && document.body.appendChild) {
+              document.body.appendChild(inp);
+              if (typeof inp.click === 'function') { inp.click(); }
+              document.body.removeChild(inp);
+            }
+          } catch (_fe) {}
+        })(ef);
+      } else if (kind === 'auth.open') {
+        var authUrl = String(ef.url || '').trim();
+        if (/^https:\/\//i.test(authUrl)) {
+          pendingAuth = { scheme: String(ef.redirect_scheme || '').toLowerCase(), cb: String(ef.cb || '') };
+          if (!callIosNative('open_url', { url: authUrl }, null)) {
+            if (window.StudioAndroid && typeof window.StudioAndroid.openUrl === 'function') {
+              try { window.StudioAndroid.openUrl(authUrl); } catch (_ae0) {}
+            } else if (typeof window.open === 'function') {
+              try { window.open(authUrl, '_blank', 'noopener,noreferrer'); } catch (_ae) {}
+            }
+          }
         }
       } else if (kind === 'http') {
         (function(req) {
@@ -471,8 +903,7 @@ public fn runtime_js() -> string {
     var node = e.target;
     while (node && node.nodeType === 1) {
       if (node.hasAttribute('data-tap')) {
-        flushInputs();
-        postUi({
+        postUiWithFlush({
           sid: node.getAttribute('data-tap'),
           kind: 'tap',
           value: node.getAttribute('data-val'),
@@ -516,8 +947,7 @@ public fn runtime_js() -> string {
   document.addEventListener('change', function(e) {
     var el = e.target;
     if (!el || el.nodeType !== 1 || !el.hasAttribute('data-change')) { return; }
-    flushInputs();
-    postUi({
+    postUiWithFlush({
       sid: el.getAttribute('data-change'),
       kind: 'change',
       value: el.type === 'checkbox' ? (el.checked ? 'true' : 'false') : String(el.value || ''),
@@ -529,8 +959,7 @@ public fn runtime_js() -> string {
     var f = e.target;
     if (!f || f.nodeType !== 1 || !f.hasAttribute('data-submit')) { return; }
     e.preventDefault();
-    flushInputs();
-    postUi({
+    postUiWithFlush({
       sid: f.getAttribute('data-submit'),
       kind: 'submit',
       value: '',
@@ -541,10 +970,97 @@ public fn runtime_js() -> string {
   document.addEventListener('keydown', function(e) {
     var el = e.target;
     if (!el || el.nodeType !== 1) { return; }
+
+    // A-30: Modal dialog/sheet focus trap & Escape dismiss
+    var modal = activeModalEl || findAncestor(el, function(n) {
+      return n.getAttribute('role') === 'dialog' && n.getAttribute('aria-modal') === 'true';
+    });
+    if (modal && document.body && document.body.contains(modal)) {
+      if (e.key === 'Escape') {
+        var wrap = modal.parentNode;
+        if (wrap && wrap.nodeType === 1 && wrap.hasAttribute('data-tap')) {
+          if (typeof e.preventDefault === 'function') { e.preventDefault(); }
+          postUiWithFlush({
+            sid: wrap.getAttribute('data-tap'),
+            kind: 'tap',
+            value: wrap.getAttribute('data-val'),
+            arg: wrap.getAttribute('data-arg')
+          });
+          return;
+        }
+      } else if (e.key === 'Tab') {
+        var fList = getFocusableElements(modal);
+        if (typeof e.preventDefault === 'function') { e.preventDefault(); }
+        if (fList.length > 0) {
+          var idx = fList.indexOf(document.activeElement);
+          if (idx < 0) { idx = fList.indexOf(el); }
+          var nextIdx = 0;
+          if (e.shiftKey) {
+            nextIdx = (idx <= 0) ? (fList.length - 1) : (idx - 1);
+          } else {
+            nextIdx = (idx < 0 || idx >= fList.length - 1) ? 0 : (idx + 1);
+          }
+          try { fList[nextIdx].focus({ preventScroll: true }); } catch (_te) {}
+          return;
+        } else {
+          try { if (typeof modal.focus === 'function') { modal.focus({ preventScroll: true }); } } catch (_te2) {}
+          return;
+        }
+      }
+    }
+
+    // A-30: Keyboard-navigable roving tabindex on role="tablist"
+    if (el.getAttribute('role') === 'tab') {
+      var tablist = findAncestor(el, function(n) { return n.getAttribute('role') === 'tablist'; });
+      if (tablist) {
+        var k = e.key;
+        if (k === 'ArrowRight' || k === 'ArrowLeft' || k === 'Home' || k === 'End') {
+          var tabs = [];
+          var tKids = tablist.childNodes || [];
+          for (var ti = 0; ti < tKids.length; ti++) {
+            var tc = tKids[ti];
+            if (tc && tc.nodeType === 1 && tc.getAttribute('role') === 'tab' && !tc.hasAttribute('disabled')) {
+              tabs.push(tc);
+            }
+          }
+          if (tabs.length > 0) {
+            var curIdx = tabs.indexOf(el);
+            if (curIdx < 0) { curIdx = 0; }
+            var rtl = isRtlElement(tablist);
+            var targetIdx = curIdx;
+            if (k === 'Home') {
+              targetIdx = 0;
+            } else if (k === 'End') {
+              targetIdx = tabs.length - 1;
+            } else if ((k === 'ArrowRight' && !rtl) || (k === 'ArrowLeft' && rtl)) {
+              targetIdx = (curIdx + 1) % tabs.length;
+            } else {
+              targetIdx = (curIdx - 1 + tabs.length) % tabs.length;
+            }
+            if (typeof e.preventDefault === 'function') { e.preventDefault(); }
+            for (var uj = 0; uj < tabs.length; uj++) {
+              tabs[uj].setAttribute('tabindex', uj === targetIdx ? '0' : '-1');
+            }
+            try { tabs[targetIdx].focus({ preventScroll: true }); } catch (_ke) {}
+            return;
+          }
+        }
+        if ((k === 'Enter' || k === ' ') && el.hasAttribute('data-tap')) {
+          if (typeof e.preventDefault === 'function') { e.preventDefault(); }
+          postUiWithFlush({
+            sid: el.getAttribute('data-tap'),
+            kind: 'tap',
+            value: el.getAttribute('data-val'),
+            arg: el.getAttribute('data-arg')
+          });
+          return;
+        }
+      }
+    }
+
     if ((e.key === 'Enter' || e.key === ' ') && el.getAttribute('role') === 'switch' && el.hasAttribute('data-tap')) {
       e.preventDefault();
-      flushInputs();
-      postUi({
+      postUiWithFlush({
         sid: el.getAttribute('data-tap'),
         kind: 'tap',
         value: el.getAttribute('data-val'),
@@ -555,8 +1071,7 @@ public fn runtime_js() -> string {
     if (e.key !== 'Enter' || e.shiftKey) { return; }
     if (el.hasAttribute('data-submit')) {
       e.preventDefault();
-      flushInputs();
-      postUi({
+      postUiWithFlush({
         sid: el.getAttribute('data-submit'),
         kind: 'submit',
         value: String(el.value || ''),
@@ -569,8 +1084,7 @@ public fn runtime_js() -> string {
       while (cur && cur.nodeType === 1) {
         if (cur.tagName === 'FORM' && cur.hasAttribute('data-submit')) {
           e.preventDefault();
-          flushInputs();
-          postUi({
+          postUiWithFlush({
             sid: cur.getAttribute('data-submit'),
             kind: 'submit',
             value: String(el.value || ''),
@@ -590,6 +1104,7 @@ public fn runtime_js() -> string {
     runEffects: runEffects,
     flushInputs: flushInputs,
     setPoll: setPoll,
+    dispatchDeepLink: dispatchDeepLink,
     _pendingCount: function() { return Object.keys(pendingInputs).length; }
   };
 })();"#

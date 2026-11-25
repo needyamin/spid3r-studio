@@ -1,7 +1,14 @@
 package {{PACKAGE_NAME}}
 
 import android.annotation.SuppressLint
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -9,9 +16,17 @@ import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.webkit.WebViewAssetLoader
+import org.json.JSONObject
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 
 class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
+    private var pageLoaded = false
+    private val pendingDeepLinks = mutableListOf<String>()
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -29,12 +44,43 @@ class MainActivity : ComponentActivity() {
         settings.allowContentAccess = false
         settings.mediaPlaybackRequiresUserGesture = false
 
+        webView.addJavascriptInterface(StudioNativeBridge(this), "StudioAndroid")
+
         webView.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(
                 view: WebView,
                 request: WebResourceRequest
             ): WebResourceResponse? {
                 return assetLoader.shouldInterceptRequest(request.url)
+            }
+
+            override fun shouldOverrideUrlLoading(
+                view: WebView,
+                request: WebResourceRequest
+            ): Boolean {
+                val uri = request.url
+                val sch = (uri.scheme ?: "").lowercase()
+                val host = (uri.host ?: "").lowercase()
+                if (sch == "https" && host == "appassets.androidplatform.net") {
+                    return false
+                }
+                if (sch == "https" || sch == "http" || sch == "mailto" || sch == "tel") {
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW, uri))
+                    } catch (_e: Exception) {
+                    }
+                }
+                return true
+            }
+
+            override fun onPageFinished(view: WebView, url: String) {
+                super.onPageFinished(view, url)
+                pageLoaded = true
+                val queued = pendingDeepLinks.toList()
+                pendingDeepLinks.clear()
+                for (u in queued) {
+                    dispatchDeepLinkJS(u)
+                }
             }
         }
 
@@ -51,7 +97,159 @@ class MainActivity : ComponentActivity() {
         }
         onBackPressedDispatcher.addCallback(this, backCallback)
 
-        webView.loadUrl("https://appassets.androidplatform.net/assets/index.html")
+        handleDeepLinkIntent(intent)
+
+        val restored = if (savedInstanceState != null) webView.restoreState(savedInstanceState) else null
+        if (restored == null) {
+            webView.loadUrl("https://appassets.androidplatform.net/assets/index.html")
+        }
         setContentView(webView)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleDeepLinkIntent(intent)
+    }
+
+    private fun handleDeepLinkIntent(intent: Intent?) {
+        if (intent == null || intent.action != Intent.ACTION_VIEW) {
+            return
+        }
+        val raw = intent.data?.toString() ?: return
+        if (raw.isEmpty()) {
+            return
+        }
+        if (pageLoaded && ::webView.isInitialized) {
+            dispatchDeepLinkJS(raw)
+        } else {
+            pendingDeepLinks.add(raw)
+        }
+    }
+
+    private fun dispatchDeepLinkJS(rawUrl: String) {
+        val lit = JSONObject.quote(rawUrl)
+        webView.post {
+            webView.evaluateJavascript(
+                "window.__studioDeepLink && window.__studioDeepLink($lit);",
+                null
+            )
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (::webView.isInitialized) {
+            webView.saveState(outState)
+        }
+    }
+}
+
+private class StudioNativeBridge(private val ctx: Context) {
+    private val keyAlias = "appstudio_secure_aes_key"
+    private val prefsName = "appstudio_secure_prefs"
+
+    private fun getOrCreateKey(): SecretKey {
+        val ks = KeyStore.getInstance("AndroidKeyStore")
+        ks.load(null)
+        val existing = ks.getKey(keyAlias, null) as? SecretKey
+        if (existing != null) {
+            return existing
+        }
+        val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        val spec = KeyGenParameterSpec.Builder(
+            keyAlias,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+            .build()
+        gen.init(spec)
+        return gen.generateKey()
+    }
+
+    @JavascriptInterface
+    fun secureSet(key: String, value: String): Boolean {
+        if (key.isBlank()) return false
+        return try {
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
+            val iv = Base64.encodeToString(cipher.iv, Base64.NO_WRAP)
+            val ct = Base64.encodeToString(cipher.doFinal(value.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
+            val prefs = ctx.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
+            prefs.edit().putString(key, "$iv:$ct").apply()
+            true
+        } catch (_e: Exception) {
+            false
+        }
+    }
+
+    @JavascriptInterface
+    fun secureGet(key: String): String? {
+        if (key.isBlank()) return null
+        return try {
+            val prefs = ctx.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
+            val raw = prefs.getString(key, null) ?: return null
+            val parts = raw.split(":", limit = 2)
+            if (parts.size != 2) return null
+            val iv = Base64.decode(parts[0], Base64.NO_WRAP)
+            val ct = Base64.decode(parts[1], Base64.NO_WRAP)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(128, iv))
+            String(cipher.doFinal(ct), Charsets.UTF_8)
+        } catch (_e: Exception) {
+            null
+        }
+    }
+
+    @JavascriptInterface
+    fun secureRemove(key: String): Boolean {
+        if (key.isBlank()) return false
+        val prefs = ctx.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
+        prefs.edit().remove(key).apply()
+        return true
+    }
+
+    @JavascriptInterface
+    fun openUrl(rawUrl: String): Boolean {
+        val clean = rawUrl.trim()
+        if (clean.isEmpty()) return false
+        return try {
+            val uri = Uri.parse(clean)
+            val sch = (uri.scheme ?: "").lowercase()
+            if (sch != "https" && sch != "http" && sch != "mailto" && sch != "tel") {
+                return false
+            }
+            val viewIntent = Intent(Intent.ACTION_VIEW, uri)
+            viewIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            ctx.startActivity(viewIntent)
+            true
+        } catch (_e: Exception) {
+            false
+        }
+    }
+
+    @JavascriptInterface
+    fun share(title: String, text: String, url: String) {
+        val body = buildString {
+            if (text.isNotBlank()) append(text)
+            if (url.isNotBlank()) {
+                if (isNotEmpty()) append("\n")
+                append(url)
+            }
+        }
+        if (body.isBlank()) return
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            if (title.isNotBlank()) putExtra(Intent.EXTRA_SUBJECT, title)
+            putExtra(Intent.EXTRA_TEXT, body)
+        }
+        val chooser = Intent.createChooser(sendIntent, title.ifBlank { "Share" })
+        chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            ctx.startActivity(chooser)
+        } catch (_e: Exception) {
+        }
     }
 }

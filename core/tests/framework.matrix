@@ -14,10 +14,38 @@ import "studio/Bridge" as br;
 import "studio/ClientJS" as client;
 import "studio/Http" as http;
 import "studio/App" as appkit;
+import "studio/Errors" as errors;
+import "studio/Store" as store_mod;
+import "studio/I18n" as i18n;
+import "core/cli/Manifest" as man;
 import "tools/FlatKit" as flatkit;
 
 let passed = 0;
 let failed = 0;
+let tmp_base = "";
+
+fn os_temp_base() -> string {
+    for k in ["TMPDIR", "TEMP", "TMP"] {
+        let ev = env(k);
+        if string(ev) != "none" {
+            let p = string(ev.unwrap()).replace("\\", "/");
+            while p.len() > 1 and p.ends_with("/") {
+                p = p.slice(0, p.len() - 1);
+            }
+            if p != "" and is_dir(p) {
+                return p;
+            }
+        }
+    }
+    if is_dir("/tmp") {
+        return "/tmp";
+    }
+    return ".";
+}
+
+fn read_via_store_iface(s, k: string) -> string {
+    return string(store_mod.read_or(s, k, "missing"));
+}
 
 fn check_ok(cond: bool, name: string) {
     if cond {
@@ -33,6 +61,12 @@ fn check_eq(a, b, name: string) {
 }
 
 fn main() -> int {
+    tmp_base = os_temp_base() + "/appstudio_test_fw";
+    if is_dir(tmp_base) {
+        dir_remove(tmp_base);
+    }
+    dir_create(tmp_base);
+
     // ---------- Util ----------
     check_eq(U.esc("<b>&"), "&lt;b&gt;&amp;", "util.esc");
     let m = {
@@ -73,7 +107,8 @@ fn main() -> int {
     check_eq(state.get("n"), null, "state.drop");
 
     // ---------- Storage ----------
-    storage.configure("_test_storage");
+    let st_dir1 = tmp_base + "/storage1";
+    storage.configure(st_dir1);
     storage.set("greeting", "hello");
     check_eq(storage.get("greeting"), "hello", "storage roundtrip");
     let reread = storage.get("greeting");
@@ -270,16 +305,19 @@ fn main() -> int {
     theme.primary("#4f46e5");
 
     // 6. Storage cache reset, atomic save, memory-only mode
-    storage.configure("_test_storage");
+    let st_dir2 = tmp_base + "/storage2";
+    let st_empty = tmp_base + "/storage_empty";
+    let st_mem = tmp_base + "/storage_mem_should_not_exist";
+    storage.configure(st_dir2);
     storage.set("persist_k", "v1");
     check_eq(storage.last_err(), "", "storage atomic save no error");
-    storage.configure("_test_storage_empty");
+    storage.configure(st_empty);
     check_eq(storage.get("persist_k"), null, "storage configure resets stale cache");
     storage.set_memory_only(true);
-    storage.configure("_test_storage_mem_should_not_exist");
+    storage.configure(st_mem);
     storage.set("mem_k", 99);
     check_eq(storage.get("mem_k"), 99, "storage memory-only works");
-    check_ok(not is_dir("_test_storage_mem_should_not_exist"), "storage memory-only skips disk");
+    check_ok(not is_dir(st_mem), "storage memory-only skips disk");
     storage.set_memory_only(false);
 
     // 7. Error boundary in Bridge & App
@@ -321,8 +359,9 @@ fn main() -> int {
     );
 
     // Cleanup test directories
-    dir_remove("_test_storage");
-    dir_remove("_test_storage_empty");
+    dir_remove(st_dir1);
+    dir_remove(st_dir2);
+    dir_remove(st_empty);
 
     // ---------- Phase 2 Core Framework Fixes ----------
     // 1. Util.fval & ival safety
@@ -432,7 +471,8 @@ fn main() -> int {
     state.reset();
     check_eq(state.get("k"), null, "state.reset clears keys");
 
-    storage.configure("_test_storage_p2");
+    let st_p2 = tmp_base + "/storage_p2";
+    storage.configure(st_p2);
     storage.set("skey", "v");
     storage.remove("skey");
     check_eq(storage.get("skey", "fallback"), "fallback", "storage.remove deletes key");
@@ -444,7 +484,7 @@ fn main() -> int {
     );
     storage.reset();
     check_eq(storage.all().keys().len(), 0, "storage.reset clears cache");
-    dir_remove("_test_storage_p2");
+    dir_remove(st_p2);
 
     // 5. Router edge cases & reset()
     nav.reset();
@@ -504,7 +544,7 @@ fn main() -> int {
     );
     check_ok(check_source_snippet(flat_win), "flatkit backslash bundle passes spid3r check");
 
-    let mf_dir = "_test_storage_mf";
+    let mf_dir = tmp_base + "/storage_mf";
     dir_create(mf_dir);
     dir_create(mf_dir + "/pages");
     let sub_src = r#"import "../studio/Components" as ui;
@@ -541,7 +581,6 @@ public fn SubPage() -> map {
     );
     check_ok(check_source_snippet(mf_flat), "multi-file flatkit output passes spid3r check");
     dir_remove(mf_dir);
-    dir_remove("_test_storage");
 
     // ---------- Phase 5: Morph, Theme Version, Host Effects & Async Http ----------
     theme.reset();
@@ -823,11 +862,596 @@ public fn SubPage() -> map {
         "__studio_tick__ flushes dirty_render and disables poll when idle"
     );
 
+    // 9. A-07 defensive copies, A-44 storage .bak + corrupt guard, A-28 re-entrant render queue
+    state.reset();
+    state.set("items", ["a", "b"]);
+    let copy_l = state.get_list("items");
+    copy_l.push("mutated");
+    check_eq(
+        state.get_list("items").len(),
+        2,
+        "A-07 State.get_list returns defensive copy"
+    );
+    state.set("nested", {
+        "inner": {
+            "v": 1
+        }
+    });
+    let nested_copy = state.get_map("nested");
+    nested_copy["inner"]["v"] = 999;
+    check_eq(
+        state.get_map("nested")["inner"]["v"],
+        1,
+        "A-07 State.get_map returns deep defensive copy"
+    );
+
+    storage.set_memory_only(false);
+    let bak_dir = tmp_base + "/storage_bak";
+    storage.configure(bak_dir);
+    storage.set("v", 1);
+    storage.set("v", 2);
+    check_ok(file_exists(bak_dir + "/kv.json.bak"), "A-44 Storage.save writes kv.json.bak");
+    let sv_before = storage.version();
+    storage.set("v", 3);
+    check_ok(storage.version() > sv_before, "A-03 Storage.version increments on set");
+    storage.set("bag", [1, 2]);
+    let raw_bag = storage.get("bag");
+    raw_bag.push(3);
+    check_eq(
+        storage.get_list("bag").len(),
+        2,
+        "A-07 Storage.get returns deep defensive copy"
+    );
+    let all_copy = storage.all();
+    all_copy["injected"] = 999;
+    check_eq(storage.get("injected", null), null, "A-07 Storage.all returns defensive copy");
+    write_file(bak_dir + "/kv.json", "{not valid json");
+    storage.load();
+    check_ok(storage.last_err() != "", "A-44 Storage.load surfaces parse error on corrupt file");
+    check_ok(not storage.save(), "A-44 Storage.save refuses to silently overwrite corrupt file");
+    let err_once = storage.last_err();
+    check_ok(not storage.save(), "A-44 repeated Storage.save keeps corruption lock");
+    check_eq(
+        storage.last_err(),
+        err_once,
+        "A-44 repeated Storage.save does not duplicate error prefix"
+    );
+    storage.reset();
+    check_eq(storage.last_err(), "", "A-44 Storage.reset clears corruption lock");
+    dir_remove(bak_dir);
+
+    let re_renders = 0;
+    let re_app = null;
+    re_app = appkit.App("ReEntrant", "sh.test.re", "1.0.0").page("Home", () => {
+        re_renders += 1;
+        if re_renders == 1 {
+            re_app.render();
+        }
+        return ui.page([ui.text("pass=" + string(re_renders))]);
+    });
+    re_app.prepare(true);
+    re_app.render();
+    check_eq(
+        re_renders,
+        2,
+        "A-28 re-entrant App.render queues follow-up pass instead of dropping frame"
+    );
+
+    // ---------- H2a OOP: AppError (A-27), Store interface, MemoryStore, FileStore, Container ----------
+    let ae = errors.make("E_NET", "Request timed out", "upstream", true);
+    check_eq(
+        ae.format(),
+        "[E_NET] Request timed out (cause: upstream)",
+        "A-27 AppError.format"
+    );
+    let aem = ae.to_map();
+    check_ok(
+        aem["code"] == "E_NET" and aem["retryable"] == true,
+        "A-27 AppError.to_map"
+    );
+    let res_ok = errors.ok_result(123);
+    let res_err = errors.err_result(ae);
+    check_ok(
+        errors.is_ok_result(res_ok) and not errors.is_ok_result(res_err),
+        "A-27 Result helpers"
+    );
+
+    let ms = store_mod.MemoryStore();
+    ms.set("items", [1, 2]);
+    let ms_copy = ms.get("items", []);
+    ms_copy.push(99);
+    check_eq(ms.get("items", []).len(), 2, "H2a MemoryStore isolates defensive copies");
+    check_eq(
+        read_via_store_iface(ms, "items").len() > 0,
+        true,
+        "H2a MemoryStore satisfies Store interface polymorphically"
+    );
+    ms.set("a", "alpha");
+    check_eq(read_via_store_iface(ms, "a"), "alpha", "H2a Store interface read");
+    let v_before = ms.version();
+    ms.remove("a");
+    check_ok(
+        ms.version() > v_before and ms.get("a", "none") == "none",
+        "H2a MemoryStore remove bumps version"
+    );
+
+    let fs_dir = tmp_base + "/filestore";
+    let fs_store = store_mod.FileStore(fs_dir);
+    fs_store.set("k1", "v1");
+    fs_store.set("k1", "v2");
+    check_ok(file_exists(fs_dir + "/kv.json.bak"), "H2a FileStore maintains .bak backup");
+    check_eq(read_via_store_iface(fs_store, "k1"), "v2", "H2a FileStore implements Store");
+    dir_remove(fs_dir);
+
+    let ctr = store_mod.Container();
+    let transient_n = 0;
+    ctr.bind("store", (_c) => store_mod.MemoryStore(), "singleton");
+    ctr.bind("tick", (_c) => {
+        transient_n += 1;
+        return transient_n;
+    }, "transient");
+    let s1 = ctr.resolve("store");
+    s1.set("shared", "yes");
+    let s2 = ctr.resolve("store");
+    check_eq(s2.get("shared", ""), "yes", "H2a Container singleton reuses instance");
+    check_eq(ctr.resolve("tick"), 1, "H2a Container transient call 1");
+    check_eq(ctr.resolve("tick"), 2, "H2a Container transient call 2");
+
+    // ---------- A-08: ui.component / ui.memo with keyed identity & slot-safe memoization ----------
+    render.clear_component_cache();
+    let comp_runs = 0;
+    let badge_comp = (props) => {
+        comp_runs += 1;
+        return ui.card([ui.text("Item: " + string(props["label"]))]);
+    };
+    let c_html1 = render.node_html(ui.memo("BadgeCard", {
+        "label": "one"
+    }, badge_comp, "badge-1"));
+    let c_html2 = render.node_html(ui.memo("BadgeCard", {
+        "label": "one"
+    }, badge_comp, "badge-1"));
+    check_ok(
+        c_html1.contains("data-key=\"badge-1\"") and c_html1 == c_html2,
+        "A-08 ui.memo attaches data-key and returns cached HTML"
+    );
+    check_eq(comp_runs, 1, "A-08 ui.memo skips re-render when props unchanged");
+    check_eq(render.component_cache_stats()["hits"], 1, "A-08 memo hit counter incremented");
+    let c_html3 = render.node_html(ui.memo("BadgeCard", {
+        "label": "two"
+    }, badge_comp, "badge-1"));
+    check_ok(
+        c_html3.contains("Item: two") and comp_runs == 2,
+        "A-08 ui.memo invalidates on prop change"
+    );
+
+    // Ephemeral closure slot inside ui.component must NOT be served from stale cache
+    let slot_runs = 0;
+    let btn_comp = (props) => {
+        slot_runs += 1;
+        return ui.button(string(props["label"]), (_ev) => {
+        });
+    };
+    br.clear_slots();
+    let s_h1 = render.node_html(ui.memo("BtnComp", {
+        "label": "Tap"
+    }, btn_comp, "btn-1"));
+    br.clear_slots();
+    let s_h2 = render.node_html(ui.memo("BtnComp", {
+        "label": "Tap"
+    }, btn_comp, "btn-1"));
+    check_eq(
+        slot_runs,
+        2,
+        "A-08 ui.memo bypasses cache when component emits ephemeral closure slots"
+    );
+    check_ok(s_h1 != s_h2, "A-08 closure component gets fresh epoch slot id on next render");
+    render.clear_component_cache();
+
+    // ---------- A-32: App.on_error opt-in crash hook ----------
+    let caught_codes = [];
+    let caught_msgs = [];
+    let hook_app = appkit.App("HookApp", "sh.test.hook", "1.0.0")
+    .on_error((err) => {
+        caught_codes.push(err.code);
+        caught_msgs.push(err.message);
+    })
+    .page("Home", () => {
+        let m = {
+        };
+        return ui.page([ui.text(string(m["missing_key"]))]);
+    });
+    hook_app.prepare(true);
+    hook_app.render();
+    check_eq(caught_codes.len(), 1, "A-32 App.on_error invoked on page render failure");
+    check_eq(
+        caught_codes[0],
+        "E_PAGE_RENDER",
+        "A-32 App.on_error receives structured AppError code"
+    );
+
+    // ---------- A-40: WASM Http.request_async rejects closures & persists req_id in State ----------
+    state.reset();
+    br.set_host_caps({
+        "platform": "web"
+    });
+    br.drain_effects();
+    check_ok(not http.get_async("https://api.example.com/a", (_ev) => {
+    }), "A-40 WASM Http.get_async rejects ephemeral closure callback");
+    check_eq(br.drain_effects().len(), 0, "A-40 rejected closure enqueues no effect");
+    check_ok(
+        http.get_async("https://api.example.com/a", "on_a"),
+        "A-40 WASM Http.get_async accepts named handler"
+    );
+    check_ok(
+        http.get_async("https://api.example.com/b", "on_b"),
+        "A-40 WASM Http.get_async second call"
+    );
+    let seq_efs = br.drain_effects();
+    check_eq(seq_efs[0]["req_id"], "http1", "A-40 first persisted req_id is http1");
+    check_eq(seq_efs[1]["req_id"], "http2", "A-40 second persisted req_id is http2");
+    check_eq(state.get("__studio_http_seq"), 2, "A-40 async seq persisted in State");
+
+    // ---------- A-45 & A-18: Manifest deployment target and Android cleartext accessors ----------
+    let mf_test_dir = tmp_base + "/manifest_checks";
+    dir_create(mf_test_dir);
+    write_file(mf_test_dir + "/studio.json", json_write({
+        "name": "MfTest",
+        "bundleID": "sh.test.mf",
+        "ios": {
+            "deploymentTarget": "26.0"
+        }
+        ,
+        "android": {
+            "cleartext": true, "cleartextDomains": ["10.0.2.2", "dev.local"]
+        }
+        ,
+    }));
+    check_eq(
+        man.ios_deployment_target_of(mf_test_dir),
+        "17",
+        "A-45 unsupported iOS deploymentTarget 26 falls back to valid SwiftPM 6.0 target 17"
+    );
+    check_ok(
+        man.android_cleartext_of(mf_test_dir),
+        "A-18 android_cleartext_of reads manifest policy"
+    );
+    check_eq(
+        man.android_cleartext_domains_of(mf_test_dir).len(),
+        2,
+        "A-18 android_cleartext_domains_of reads domain list"
+    );
+    dir_remove(mf_test_dir);
+
+    // ---------- A-26: Storage & Store schema versioning, migration, dirty flag & batching ----------
+    let mig_dir = tmp_base + "/storage_mig";
+    dir_create(mig_dir);
+    storage.set_memory_only(false);
+    storage.configure(mig_dir);
+    storage.set("user", "yamin");
+    check_eq(
+        storage.schema_version(),
+        0,
+        "A-26 unversioned storage starts at schema_version 0"
+    );
+    let mig_runs = 0;
+    let did_mig = storage.migrate(2, (from_v, data) => {
+        mig_runs += 1;
+        data["migrated_from"] = from_v;
+        data["user_upper"] = string(data["user"]).upper();
+        return data;
+    });
+    check_ok(did_mig and mig_runs == 1, "A-26 storage.migrate runs when cur < target");
+    check_eq(storage.schema_version(), 2, "A-26 storage.schema_version updated to 2");
+    check_eq(storage.get("user_upper"), "YAMIN", "A-26 migrated field persisted");
+    let did_mig2 = storage.migrate(2, (_fv, d) => {
+        mig_runs += 1;
+        return d;
+    });
+    check_ok(not did_mig2 and mig_runs == 1, "A-26 storage.migrate is idempotent at target version");
+
+    // Batched persistence: 50 writes -> 1 disk save
+    let saves_before = storage.save_count();
+    storage.batch(() => {
+        let bi = 0;
+        while bi < 50 {
+            storage.set("k_" + string(bi), bi);
+            bi += 1;
+        }
+    });
+    check_eq(
+        storage.save_count() - saves_before,
+        1,
+        "A-26 storage.batch coalesces 50 mutations into 1 disk write"
+    );
+    check_ok(not storage.is_dirty(), "A-26 storage.is_dirty clears after batch flush");
+    storage.set_auto_flush(false);
+    storage.set("deferred", 99);
+    check_ok(storage.is_dirty(), "A-26 deferred set marks storage dirty");
+    check_ok(
+        storage.flush() and not storage.is_dirty(),
+        "A-26 explicit flush writes and clears dirty"
+    );
+    storage.set_auto_flush(true);
+
+    // Reload from disk verifies schema_version & batched values survive restart
+    storage.configure(mig_dir);
+    check_eq(storage.schema_version(), 2, "A-26 schema_version survives reload");
+    check_eq(storage.get("k_49"), 49, "A-26 batched key survives reload");
+    check_eq(storage.get("deferred"), 99, "A-26 deferred flushed key survives reload");
+
+    // Atomic batch rollback on exception: partial writes must not leak into memory or next flush
+    let batch_threw = false;
+    let saves_pre_fail = storage.save_count();
+    try {
+        storage.batch(() => {
+            storage.set("partial_leaked", "should_rollback");
+            throw "boom_batch";
+        });
+    } catch (_be) {
+        batch_threw = true;
+    }
+    check_ok(batch_threw, "A-26 storage.batch rethrows exception");
+    check_eq(
+        storage.get("partial_leaked", "missing"),
+        "missing",
+        "A-26 storage.batch rolls back partial mutation on exception"
+    );
+    check_ok(not storage.is_dirty(), "A-26 storage.batch restores clean dirty_flag on rollback");
+    check_eq(
+        storage.save_count(),
+        saves_pre_fail,
+        "A-26 failed storage.batch performs zero disk writes"
+    );
+    storage.set("after_fail", "ok");
+    check_eq(
+        storage.save_count(),
+        saves_pre_fail + 1,
+        "A-26 storage.batch restores auto_flush after exception"
+    );
+    storage.configure(mig_dir);
+    check_eq(
+        storage.get("partial_leaked", "missing"),
+        "missing",
+        "A-26 rolled-back batch key never flushed to disk on subsequent write"
+    );
+
+    // Corrupt kv.json refuses migrate() without mutating schema_version or overwriting file
+    let corrupt_mig_dir = tmp_base + "/corrupt_mig";
+    dir_remove(corrupt_mig_dir);
+    dir_create(corrupt_mig_dir);
+    write_file(corrupt_mig_dir + "/kv.json", "{not valid json");
+    storage.configure(corrupt_mig_dir);
+    let corrupt_ran = false;
+    let corrupt_ok = storage.migrate(3, (_fv, d) => {
+        corrupt_ran = true;
+        return d;
+    });
+    check_ok(
+        not corrupt_ok and not corrupt_ran,
+        "A-26 storage.migrate refuses corrupt store without calling migrate_fn"
+    );
+    check_eq(storage.schema_version(), 0, "A-26 corrupt store keeps schema_version 0");
+    let fs_corrupt = store_mod.FileStore(corrupt_mig_dir);
+    check_ok(
+        not fs_corrupt.migrate(3, (_fv, d) => d),
+        "A-26 FileStore.migrate refuses corrupt store"
+    );
+    dir_remove(corrupt_mig_dir);
+    dir_remove(mig_dir);
+
+    // MemoryStore & FileStore migration + batching + rollback
+    let ms2 = store_mod.MemoryStore();
+    ms2.set("old", "v1");
+    check_ok(ms2.migrate(1, (_fv, d) => {
+        d["new_k"] = string(d["old"]) + "_migrated";
+        return d;
+    }), "A-26 MemoryStore.migrate runs");
+    check_eq(ms2.schema_version(), 1, "A-26 MemoryStore.schema_version == 1");
+    check_eq(ms2.get("new_k", ""), "v1_migrated", "A-26 MemoryStore migrated data");
+    let ms_threw = false;
+    try {
+        ms2.batch(() => {
+            ms2.set("temp_bad", 123);
+            throw "ms_boom";
+        });
+    } catch (_me) {
+        ms_threw = true;
+    }
+    check_ok(
+        ms_threw and ms2.get("temp_bad", -1) == -1,
+        "A-26 MemoryStore.batch rolls back partial writes on exception"
+    );
+
+    let fs_mig_dir = tmp_base + "/fstore_mig";
+    let fs2 = store_mod.FileStore(fs_mig_dir);
+    let fs_saves0 = fs2.save_count();
+    fs2.batch(() => {
+        fs2.set("a", 1);
+        fs2.set("b", 2);
+        fs2.set("c", 3);
+    });
+    check_eq(
+        fs2.save_count() - fs_saves0,
+        1,
+        "A-26 FileStore.batch coalesces 3 mutations into 1 disk write"
+    );
+    let fs_threw = false;
+    try {
+        fs2.batch(() => {
+            fs2.set("bad_key", 999);
+            throw "fs_boom";
+        });
+    } catch (_fse) {
+        fs_threw = true;
+    }
+    check_ok(
+        fs_threw and fs2.get("bad_key", -1) == -1,
+        "A-26 FileStore.batch rolls back partial writes on exception"
+    );
+    dir_remove(fs_mig_dir);
+
+    // ---------- A-04, A-05, A-53: Capability bridge, secure_store, share, pick_file, auth & deep links ----------
+    br.reset();
+    check_ok(br.has_cap("secure_store"), "A-05 default host_caps reports secure_store");
+    br.set_host_caps({
+        "platform": "ios", "capabilities": {
+            "share": false, "custom_biometric": true
+        }
+        ,
+    });
+    check_ok(not br.has_cap("share"), "A-05 set_host_caps updates capability flags");
+    check_ok(br.has_cap("custom_biometric"), "A-05 set_host_caps merges custom capabilities");
+    check_ok(
+        br.secure_set("auth_token", "tok123", "on_sec"),
+        "A-04 secure_set enqueues effect"
+    );
+    check_ok(not br.secure_set("bad key!", "v"), "A-04 secure_set rejects unsafe key chars");
+    check_ok(br.secure_get("auth_token", "on_sec"), "A-04 secure_get enqueues effect");
+    check_ok(not br.secure_get("auth_token", ""), "A-04 secure_get requires callback");
+    check_ok(br.secure_remove("auth_token"), "A-04 secure_remove enqueues effect");
+    check_ok(
+        br.share("Title", "Body", "https://example.org"),
+        "A-05 share accepts safe https url"
+    );
+    check_ok(
+        not br.share("Title", "Body", "javascript:alert(1)"),
+        "A-05 share blocks javascript: url"
+    );
+    check_ok(br.pick_file("image/*", "on_file"), "A-05 pick_file enqueues files.pick");
+    check_ok(
+        br.start_auth("https://auth.example.org/authorize", "myapp", "on_auth"),
+        "A-53 start_auth accepts https + custom scheme"
+    );
+    check_ok(
+        not br.start_auth("http://insecure.example.org/auth", "myapp", "on_auth"),
+        "A-53 start_auth rejects cleartext http://"
+    );
+    check_ok(
+        not br.start_auth("https://auth.example.org/auth", "javascript", "on_auth"),
+        "A-53 start_auth rejects unsafe redirect scheme"
+    );
+    let cap_efs = br.drain_effects();
+    check_eq(cap_efs.len(), 6, "A-04/A-05/A-53 enqueued 6 valid host effects");
+    check_eq(cap_efs[0]["kind"], "secure_store.set", "effect kind secure_store.set");
+    check_eq(cap_efs[1]["kind"], "secure_store.get", "effect kind secure_store.get");
+    check_eq(cap_efs[2]["kind"], "secure_store.remove", "effect kind secure_store.remove");
+    check_eq(cap_efs[3]["kind"], "share", "effect kind share");
+    check_eq(cap_efs[4]["kind"], "files.pick", "effect kind files.pick");
+    check_eq(cap_efs[5]["kind"], "auth.open", "effect kind auth.open");
+
+    let dl_ok = br.parse_deep_link("myapp://auth/callback?code=xyz&state=s1#frag");
+    check_eq(dl_ok["scheme"], "myapp", "A-53 parse_deep_link scheme");
+    check_eq(dl_ok["host"], "auth", "A-53 parse_deep_link host");
+    check_eq(dl_ok["path"], "/callback", "A-53 parse_deep_link path");
+    check_eq(dl_ok["query"]["code"], "xyz", "A-53 parse_deep_link query.code");
+    check_eq(dl_ok["query"]["state"], "s1", "A-53 parse_deep_link query.state");
+    check_eq(
+        br.parse_deep_link("javascript://evil").len(),
+        0,
+        "A-53 parse_deep_link rejects javascript:"
+    );
+
+    // ---------- A-29: I18n, RTL direction & logical CSS ----------
+    i18n.reset();
+    i18n.register("en", {
+        "hello": r"Hello, {name}!", "only_en": "Fallback OK"
+    });
+    i18n.register("ar", {
+        "hello": r"Marhaba, {name}!"
+    });
+    check_eq(i18n.locale(), "en", "A-29 default locale is en");
+    check_ok(not i18n.is_rtl() and i18n.dir() == "ltr", "A-29 en is LTR");
+    check_eq(i18n.t("hello", {
+        "name": "Ada"
+    }), "Hello, Ada!", "A-29 t() interpolates params");
+    i18n.set_locale("ar-EG");
+    check_ok(i18n.is_rtl() and i18n.dir() == "rtl", "A-29 ar-EG detected as RTL");
+    check_eq(i18n.t("hello", {
+        "name": "Ada"
+    }), "Marhaba, Ada!", "A-29 regional ar-EG falls back to base ar");
+    check_eq(i18n.t("only_en"), "Fallback OK", "A-29 missing ar key falls back to en");
+    check_eq(i18n.t("unknown.key"), "unknown.key", "A-29 missing key returns key literal");
+    let rtl_page = render.node_html(ui.page([ui.text("Hi")]));
+    check_ok(
+        rtl_page.contains("dir=\"rtl\""),
+        "A-29 Render emits dir=\"rtl\" when RTL locale active"
+    );
+    // Memoized component must invalidate cache across locale switches
+    render.clear_component_cache();
+    i18n.set_locale("en");
+    let memo_en = render.node_html(ui.component("greet_memo", {
+        "name": "Ada"
+    }, (p) => ui.text(i18n.t("hello", p)), {
+        "memo": true, "key": "greet_memo"
+    }));
+    i18n.set_locale("ar");
+    let memo_ar = render.node_html(ui.component("greet_memo", {
+        "name": "Ada"
+    }, (p) => ui.text(i18n.t("hello", p)), {
+        "memo": true, "key": "greet_memo"
+    }));
+    check_ok(
+        memo_en.contains("Hello, Ada!") and memo_ar.contains("Marhaba, Ada!"),
+        "A-29 memoized ui.component invalidates cache when locale changes"
+    );
+    let sheet_css = css.stylesheet();
+    check_ok(
+        sheet_css.contains("padding-inline:") and sheet_css.contains("inset-inline-start:") and sheet_css.contains("[dir=rtl]"),
+        "A-29 CSS uses logical properties and RTL rules"
+    );
+    i18n.reset();
+
+    // ---------- A-30: Roving tabindex on tabbar & segmented controls ----------
+    let seg_roving = render.node_html(ui.segmented(["A", "B", "C"], 1, "on_s"));
+    check_ok(
+        seg_roving.contains("aria-selected=\"true\" tabindex=\"0\"") and seg_roving.contains("aria-selected=\"false\" tabindex=\"-1\""),
+        "A-30 segmented emits roving tabindex 0 on active tab and -1 on inactive tabs"
+    );
+
+    // ---------- A-24: Log ring buffer & dev error overlay ----------
+    appkit.clear_logs();
+    let li = 0;
+    while li < 120 {
+        appkit.log_info("test", "msg_" + string(li));
+        li += 1;
+    }
+    let all_logs = appkit.recent_logs(200);
+    check_eq(all_logs.len(), 100, "A-24 log ring buffer caps at 100 entries");
+    check_eq(all_logs[0]["message"], "msg_20", "A-24 log ring drops oldest entries FIFO");
+    check_eq(all_logs[99]["message"], "msg_119", "A-24 log ring retains latest entry");
+    appkit.set_dev_mode(true);
+    check_ok(appkit.is_dev_mode(), "A-24 set_dev_mode toggles flag");
+    appkit.set_dev_mode(false);
+    appkit.clear_logs();
+
+    // ---------- A-03 & A-25: Render dispatch performance budget (200 nodes) ----------
+    appkit.reset_perf();
+    let big_items = [];
+    let bi2 = 0;
+    while bi2 < 200 {
+        big_items.push(ui.card([ui.text("Row " + string(bi2)), ui.badge("OK", "success")], {
+            "key": "r_" + string(bi2)
+        }));
+        bi2 += 1;
+    }
+    let t_perf_0 = now_ms();
+    let big_html = render.node_html(ui.page(big_items));
+    let elapsed_perf = now_ms() - t_perf_0;
+    check_ok(
+        big_html.contains("data-key=\"r_0\"") and big_html.contains("data-key=\"r_199\""),
+        "A-25 O(1) dispatch table renders 200-node tree completely"
+    );
+    check_ok(
+        elapsed_perf < 1000,
+        "A-03 200-node render completes within 1000ms budget (" + string(elapsed_perf) + "ms)"
+    );
+
     state.reset();
     theme.reset();
+    i18n.reset();
     br.reset();
-    if is_dir("storage") {
-        dir_remove("storage");
+    if is_dir(tmp_base) {
+        dir_remove(tmp_base);
     }
 
     println("");
@@ -838,17 +1462,18 @@ public fn SubPage() -> map {
     return 0;
 }
 
-/// Parse-check a source string by round-tripping through a temp file.
+/// Parse-check a source string by round-tripping through an isolated temp file.
 fn check_source_snippet(src: string) -> bool {
-    dir_create("_test_storage");
-    let p = "_test_storage/_flat_check.matrix";
+    let sn_dir = tmp_base + "/snippet";
+    dir_create(sn_dir);
+    let p = sn_dir + "/_flat_check.matrix";
     let w = write_file(p, src);
     if w.is_err() {
-        dir_remove("_test_storage");
+        dir_remove(sn_dir);
         return false;
     }
     let r = exec_capture("spid3r", ["check", p], null);
-    dir_remove("_test_storage");
+    dir_remove(sn_dir);
     if r.is_err() {
         return false;
     }

@@ -65,10 +65,86 @@ fn parse_req_path(raw: string) -> string {
     return target;
 }
 
+/// Exact UTF-8 byte length of a string for HTTP Content-Length headers.
+public fn utf8_byte_len(s: string) -> int {
+    let n = s.len();
+    let total = n;
+    let i = 0;
+    while i < n {
+        let cp = ord(s[i]);
+        if cp >= 128 {
+            if cp < 2048 {
+                total += 1;
+            } elif cp < 65536 {
+                total += 2;
+            } else {
+                total += 3;
+            }
+        }
+        i += 1;
+    }
+    return total;
+}
+
 fn send_not_found(conn) {
     let body = "404 Not Found";
     let hdr = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: "
-    + string(body.len()) + "\r\nConnection: close\r\n\r\n";
+    + string(utf8_byte_len(body)) + "\r\nConnection: close\r\n\r\n";
+    tcp_write(conn, hdr + body);
+    tcp_close(conn);
+}
+
+const LIVERELOAD_JS = r#"(function(){
+  var ver = null;
+  function poll() {
+    fetch('/__studio_reload', { cache: 'no-store' }).then(function(r) {
+      return r.ok ? r.json() : null;
+    }).then(function(d) {
+      if (!d || typeof d.version !== 'string') { return; }
+      if (ver === null) { ver = d.version; }
+      else if (d.version !== ver) { location.reload(); }
+    }).catch(function() {});
+  }
+  poll();
+  setInterval(poll, 700);
+})();
+"#
+
+;
+
+/// Read the current dev live-reload build token stored in web_dir (A-23).
+public fn read_reload_version(web_dir: string) -> string {
+    let r = read_file(fs.join_dir(web_dir, ".__studio_dev_ver"));
+    if r.is_ok() {
+        let v = string(r.unwrap()).trim();
+        if v != "" {
+            return v;
+        }
+    }
+    return "0";
+}
+
+/// Write a new dev live-reload build token into web_dir (A-23).
+public fn write_reload_version(web_dir: string, ver: string) -> bool {
+    return fs.write_checked(fs.join_dir(web_dir, ".__studio_dev_ver"), ver);
+}
+
+/// Inject the dev-only live-reload script tag into served index.html (A-23).
+public fn inject_livereload_html(html: string) -> string {
+    let tag = "<script src=\"/__studio_livereload.js\"></script>";
+    if html.contains("/__studio_livereload.js") {
+        return html;
+    }
+    if html.contains("</body>") {
+        return html.replace("</body>", tag + "\n</body>");
+    }
+    return html + "\n" + tag;
+}
+
+fn send_text_ok(conn, mime: string, body: string) {
+    let hdr = "HTTP/1.1 200 OK\r\nContent-Type: " + mime
+    + "\r\nCache-Control: no-store\r\nContent-Length: " + string(utf8_byte_len(body))
+    + "\r\nConnection: close\r\n\r\n";
     tcp_write(conn, hdr + body);
     tcp_close(conn);
 }
@@ -89,10 +165,32 @@ fn handle_conn(conn, web_dir: string) {
         send_not_found(conn);
         return;
     }
+    if rel == "__studio_reload" {
+        let ver = read_reload_version(web_dir);
+        send_text_ok(conn, "application/json; charset=utf-8", json_write({
+            "version": ver
+        }));
+        return;
+    }
+    if rel == "__studio_livereload.js" {
+        send_text_ok(conn, "application/javascript; charset=utf-8", LIVERELOAD_JS);
+        return;
+    }
     let fpath = fs.join_dir(web_dir, rel);
     if not is_file(fpath) {
         println("[http] 404 /" + rel);
         send_not_found(conn);
+        return;
+    }
+    if rel == "index.html" {
+        let tr = read_file(fpath);
+        if tr.is_err() {
+            send_not_found(conn);
+            return;
+        }
+        let html_out = inject_livereload_html(string(tr.unwrap()));
+        send_text_ok(conn, "text/html; charset=utf-8", html_out);
+        println("[http] 200 /" + rel);
         return;
     }
     let br = read_bytes(fpath);
@@ -123,6 +221,7 @@ public fn cmd_dev_web(
     }
     let clean_dir = fs.trim_slash(appdir);
     let web_dir = fs.join_dir(clean_dir, "build/web");
+    let _init_ver = write_reload_version(web_dir, "1");
     let bind_host = host.trim();
     if bind_host == "" {
         bind_host = "127.0.0.1";
@@ -165,8 +264,10 @@ public fn cmd_dev_web(
         );
     }
 
+    let watch_web_dir = web_dir;
     spawn fn() {
         let sig = fs.source_signature(clean_dir);
+        let rev = 1;
         while true {
             sleep_ms(500);
             let next_sig = fs.source_signature(clean_dir);
@@ -175,7 +276,11 @@ public fn cmd_dev_web(
                 println("change detected — rebuilding web bundle...");
                 let brc = rebuild_fn();
                 if brc == 0 {
-                    println("rebuild complete — refresh browser to load updates.");
+                    rev += 1;
+                    let _wv = write_reload_version(watch_web_dir, string(rev));
+                    println(
+                        "rebuild complete — live-reload triggered (rev " + string(rev) + ")."
+                    );
                 }
             }
         }

@@ -1,16 +1,214 @@
 // cli/BuildWeb.matrix
-// Wasm host HTML emitter and Web target packager.
+// Wasm host HTML emitter, bundle verification gate (A-38/A-49), and Web target packager.
 
 import "Fs" as fs;
 import "Manifest" as man;
 import "Exec" as ex;
 
+fn is_token_char(c: string, upper_only: bool, allow_dash: bool) -> bool {
+    if (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") {
+        return true;
+    }
+    if not upper_only and ((c >= "a" and c <= "z") or c == "_") {
+        return true;
+    }
+    if allow_dash and c == "-" {
+        return true;
+    }
+    return false;
+}
+
+fn has_prefixed_secret(
+    src: string,
+    prefix: string,
+    min_tail: int,
+    upper_only: bool,
+    allow_dash: bool
+) -> bool {
+    if not src.contains(prefix) {
+        return false;
+    }
+    let plen = prefix.len();
+    let rem = src;
+    let guard = 0;
+    while guard < 128 {
+        guard += 1;
+        let pos = rem.index_of(prefix);
+        if pos < 0 {
+            return false;
+        }
+        let j = pos + plen;
+        let n = rem.len();
+        let run = 0;
+        while j < n and is_token_char(rem[j], upper_only, allow_dash) {
+            run += 1;
+            j += 1;
+        }
+        if run >= min_tail {
+            return true;
+        }
+        if pos + plen >= n {
+            return false;
+        }
+        rem = rem.slice(pos + plen, n);
+    }
+    return false;
+}
+
+/// Build-time secret scanner for world-readable flat bundles (A-49).
+/// Returns a list of matched secret class descriptions (empty when clean).
+public fn scan_secrets(flat: string) -> list {
+    let findings = [];
+    if has_prefixed_secret(flat, "AKIA", 16, true, false) {
+        findings.push("AWS access key ID (AKIA...)");
+    }
+    for gh in ["ghp_", "gho_", "ghu_", "ghs_", "github_pat_"] {
+        if has_prefixed_secret(flat, gh, 20, false, false) {
+            findings.push("GitHub token (" + gh + "...)");
+            break;
+        }
+    }
+    for sk in ["sk_live_", "sk_test_"] {
+        if has_prefixed_secret(flat, sk, 16, false, false) {
+            findings.push("Stripe secret key (" + sk + "...)");
+            break;
+        }
+    }
+    for sl in ["xoxb-", "xoxp-", "xoxa-"] {
+        if has_prefixed_secret(flat, sl, 12, false, true) {
+            findings.push("Slack token (" + sl + "...)");
+            break;
+        }
+    }
+    if has_prefixed_secret(flat, "AIza", 35, false, true) {
+        findings.push("Google API key (AIza...)");
+    }
+    if flat.contains("-----BEGIN ") and flat.contains("PRIVATE KEY-----") {
+        let rem = flat;
+        let pguard = 0;
+        while pguard < 64 {
+            pguard += 1;
+            let pem_pos = rem.index_of("-----BEGIN ");
+            if pem_pos < 0 {
+                break;
+            }
+            let end_p = pem_pos + 64;
+            if end_p > rem.len() {
+                end_p = rem.len();
+            }
+            if rem.slice(pem_pos, end_p).contains("PRIVATE KEY-----") {
+                findings.push("PEM private key block");
+                break;
+            }
+            if pem_pos + 11 >= rem.len() {
+                break;
+            }
+            rem = rem.slice(pem_pos + 11, rem.len());
+        }
+    }
+    return findings;
+}
+
+/// Scan a flattened bundle for top-level 'enum' declarations (A-51).
+/// Spid3r v1.1.1 parses and type-checks enums but discards them at runtime.
+public fn scan_unsupported_enums(flat: string) -> list {
+    let found = [];
+    let in_raw = false;
+    for raw_row in string(flat).split("\n") {
+        let t = string(raw_row).replace("\r", "").trim();
+        if in_raw {
+            if t.contains("\"#") {
+                in_raw = false;
+            }
+            continue;
+        }
+        if t.contains("r#\"") and not t.contains("\"#") {
+            in_raw = true;
+            continue;
+        }
+        if t.starts_with("//") or t.starts_with("/*") or t.starts_with("*") {
+            continue;
+        }
+        let rest = "";
+        if t.starts_with("public enum ") {
+            rest = t.slice(12, t.len()).trim();
+        } elif t.starts_with("private enum ") {
+            rest = t.slice(13, t.len()).trim();
+        } elif t.starts_with("enum ") {
+            rest = t.slice(5, t.len()).trim();
+        }
+        if rest != "" {
+            let ename = "";
+            let k = 0;
+            while k < rest.len() {
+                let c = rest[k];
+                let ok = (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "_";
+                if not ok {
+                    break;
+                }
+                ename += c;
+                k += 1;
+            }
+            if ename != "" and (rest.contains("{") or rest.len() == ename.len()) {
+                found.push(ename);
+            }
+        }
+    }
+    return found;
+}
+
+/// Static bundle gate (A-38, A-49 & A-51): scans for hardcoded secrets, rejects
+/// Spid3r v1.1.1-discarded enums, and runs `spid3r check --deny-warnings` on the exact bundle.
+public fn verify_flat_bundle(flat: string, workdir: string) -> int {
+    let secrets = scan_secrets(flat);
+    if secrets.len() > 0 {
+        for s in secrets {
+            println(
+                "error[security]: hardcoded secret detected in flat bundle: " + string(s)
+            );
+        }
+        println(
+            "hint: flat bundles are readable by clients; move credentials to a server/proxy."
+        );
+        return 1;
+    }
+    let enums = scan_unsupported_enums(flat);
+    if enums.len() > 0 {
+        for en in enums {
+            println(
+                "error[lint]: A-51 unsupported 'enum " + string(en) + "' declaration (Spid3r v1.1.1 discards enums at runtime)"
+            );
+        }
+        println(
+            "hint: replace 'enum' declarations with string/int constants or classes."
+        );
+        return 1;
+    }
+    fs.ensure_dir(workdir);
+    let tmp = fs.join_dir(workdir, "._studio_bundle_check.matrix");
+    if not fs.write_checked(tmp, flat) {
+        return 1;
+    }
+    let r = exec_capture("spid3r", ["check", "--deny-warnings", tmp], null);
+    let _rm = remove_file(tmp);
+    if r.is_err() {
+        println("error: spid3r check failed to run: " + string(r.unwrap_err()));
+        return 1;
+    }
+    let m = r.unwrap();
+    if int(m["code"]) != 0 {
+        ex.flush_child_output(m);
+        println("error: flat bundle failed static verification (spid3r check --deny-warnings)");
+        return 1;
+    }
+    return 0;
+}
+
 public fn fill_host_page(
     appdir: string,
     outdir: string,
-    flat: string,
     client_js: string,
-    inline_sources: bool
+    release: bool = false
 ) -> int {
     let name = man.app_name_of(appdir);
     let bundle_id = man.app_bundle_id_of(appdir);
@@ -22,10 +220,6 @@ public fn fill_host_page(
         return 1;
     }
     let tpl = string(tpl_r.unwrap());
-    let app_src_json = "null";
-    if inline_sources {
-        app_src_json = fs.safe_script_json(flat);
-    }
     let icon_tag = "";
     let touch_icon_tag = "";
     let icon_src = man.app_icon_of(appdir);
@@ -61,17 +255,32 @@ public fn fill_host_page(
     + "<meta name=\"apple-mobile-web-app-title\" content=\"" + fs.html_escape(name) + "\">\n"
     + "<link rel=\"manifest\" href=\"manifest.json\">" + touch_icon_tag;
 
-    let out = tpl.replace("\{\{APP_TITLE\}\}", fs.html_escape(name))
+    let csp_conn = man.csp_connect_src_of(appdir);
+    let csp_extra = if release {
+        " upgrade-insecure-requests;"
+    } else {
+        ""
+    };
+    let out = tpl.replace("\{\{APP_CSP_CONNECT_SRC\}\}", fs.html_escape(csp_conn))
+    .replace("\{\{APP_CSP_EXTRA\}\}", csp_extra)
+    .replace("\{\{APP_TITLE\}\}", fs.html_escape(name))
     .replace("\{\{APP_ICON_TAG\}\}", icon_tag)
     .replace("\{\{APP_PWA_TAGS\}\}", pwa_tags)
     .replace("\{\{APP_BUNDLE_ID_JSON\}\}", fs.safe_script_json(bundle_id))
     .replace("\{\{APP_THEME_JSON\}\}", theme_json)
-    .replace("\{\{APP_SOURCE_JSON\}\}", app_src_json)
     .replace("\{\{CLIENT_JS\}\}", client_js);
     if not fs.write_checked(outdir + "/index.html", out) {
         return 1;
     }
     return 0;
+}
+
+/// Emit FlatKit line map JSON (app.matrix.map.json) for dev runtime stack mapping (A-24).
+public fn emit_line_map(outdir: string, lmap: list) -> bool {
+    if lmap == null or lmap.len() == 0 {
+        return true;
+    }
+    return fs.write_checked(outdir + "/app.matrix.map.json", json_write(lmap) + "\n");
 }
 
 fn emit_pwa_files(appdir: string, outdir: string) -> int {
@@ -112,7 +321,10 @@ fn emit_pwa_files(appdir: string, outdir: string) -> int {
                 mime = "image/jpeg";
             }
             manifest["icons"] = [{
-                "src": icon_name, "sizes": "any", "type": mime
+                "src": icon_name, "sizes": "192x192", "type": mime, "purpose": "any maskable"
+            }
+            , {
+                "src": icon_name, "sizes": "512x512", "type": mime, "purpose": "any maskable"
             }
             ];
         }
@@ -152,13 +364,27 @@ public fn copy_wasm_assets(rt_dir: string, dest_dir: string) -> int {
     return 0;
 }
 
-public fn build(appdir: string, outdir: string, flat: string, client_js: string) -> int {
+public fn build(
+    appdir: string,
+    outdir: string,
+    flat: string,
+    client_js: string,
+    release: bool = false
+) -> int {
     fs.ensure_dir(outdir);
     fs.setup_import_path();
     for warn in man.validate_manifest(appdir) {
         println("warning: " + warn);
     }
-    println("building web app -> " + outdir + "/index.html");
+    if verify_flat_bundle(flat, outdir) != 0 {
+        return 1;
+    }
+    let mode_lbl = if release {
+        "release"
+    } else {
+        "debug"
+    };
+    println("building web app (" + mode_lbl + ") -> " + outdir + "/index.html");
     let assets = ex.wasm_runtime_assets(outdir + "/_runtime");
     if assets == "" {
         return 1;
@@ -172,11 +398,22 @@ public fn build(appdir: string, outdir: string, flat: string, client_js: string)
     if not fs.write_checked(outdir + "/app.matrix", flat) {
         return 1;
     }
-    let rc = fill_host_page(appdir, outdir, flat, client_js, false);
+    let rc = fill_host_page(appdir, outdir, client_js, release);
     if rc != 0 {
         return rc;
     }
     if emit_pwa_files(appdir, outdir) != 0 {
+        return 1;
+    }
+    if release {
+        if file_exists(outdir + "/app.matrix.map.json") {
+            let _rm_map = remove_file(outdir + "/app.matrix.map.json");
+        }
+        if file_exists(outdir + "/.__studio_dev_ver") {
+            let _rm_ver = remove_file(outdir + "/.__studio_dev_ver");
+        }
+    }
+    if not man.emit_sbom(appdir, outdir, "web", release) {
         return 1;
     }
     println("done: " + outdir + "/index.html (serve the folder over http, or open in a browser)");

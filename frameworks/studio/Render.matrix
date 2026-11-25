@@ -7,7 +7,34 @@
 
 import "Bridge" as br;
 import "Router" as nav;
+import "I18n" as i18n;
 import "Util" as U;
+
+let allow_raw_html = false;
+let comp_cache = {
+};
+let comp_cache_hits = 0;
+let comp_cache_misses = 0;
+
+/// Explicitly opt in to unsanitized ui.html() passthrough (disabled by default — A-12).
+public fn set_allow_raw_html(flag: bool) {
+    allow_raw_html = flag;
+}
+
+/// Clear the ui.component() memoization cache and reset hit/miss counters (A-08).
+public fn clear_component_cache() {
+    comp_cache = {
+    };
+    comp_cache_hits = 0;
+    comp_cache_misses = 0;
+}
+
+/// Return component memoization hit/miss statistics (A-08).
+public fn component_cache_stats() -> map {
+    return {
+        "hits": comp_cache_hits, "misses": comp_cache_misses, "entries": comp_cache.len()
+    };
+}
 
 // ---------- props -> attributes ----------
 
@@ -22,28 +49,43 @@ fn css_dim(v) -> string {
 fn style_of(p: map) -> string {
     let s = "";
     if U.prop(p, "gap") != null {
-        s += "gap:" + string(p["gap"]) + "px;";
+        s += "gap:" + U.esc_css_val(string(p["gap"])) + "px;";
     }
     if U.prop(p, "align") != null {
-        s += "align-items:" + string(p["align"]) + ";";
+        let av = U.esc_css_val(string(p["align"]));
+        if av != "" {
+            s += "align-items:" + av + ";";
+        }
     }
     if U.prop(p, "justify") != null {
-        s += "justify-content:" + string(p["justify"]) + ";";
+        let jv = U.esc_css_val(string(p["justify"]));
+        if jv != "" {
+            s += "justify-content:" + jv + ";";
+        }
     }
     if U.prop(p, "pad") != null {
-        s += "padding:" + string(p["pad"]) + "px;";
+        s += "padding:" + U.esc_css_val(string(p["pad"])) + "px;";
     }
     if U.prop(p, "wrap") == true {
         s += "flex-wrap:wrap;";
     }
     if U.prop(p, "width") != null {
-        s += "width:" + css_dim(p["width"]) + ";";
+        let wv = css_dim(p["width"]);
+        if wv != "" {
+            s += "width:" + wv + ";";
+        }
     }
     if U.prop(p, "height") != null {
-        s += "height:" + css_dim(p["height"]) + ";";
+        let hv = css_dim(p["height"]);
+        if hv != "" {
+            s += "height:" + hv + ";";
+        }
     }
     if U.prop(p, "flex") != null {
-        s += "flex:" + string(p["flex"]) + ";";
+        let fv = U.esc_css_val(string(p["flex"]));
+        if fv != "" {
+            s += "flex:" + fv + ";";
+        }
     }
     if U.prop(p, "cols") != null {
         let cols = U.ival(p, "cols", 2);
@@ -53,7 +95,7 @@ fn style_of(p: map) -> string {
         s += "grid-template-columns:repeat(" + string(cols) + ",minmax(0,1fr));";
     }
     if U.prop(p, "style") != null {
-        s += string(p["style"]);
+        s += U.esc_style(string(p["style"]));
     }
     return s;
 }
@@ -115,6 +157,12 @@ fn attrs(p: map, base_cls: string) -> string {
     if U.prop(p, "tabindex") != null {
         a += " tabindex=\"" + U.esc_attr(string(p["tabindex"])) + "\"";
     }
+    if U.prop(p, "dir") != null {
+        let dv = string(p["dir"]).trim().lower();
+        if dv == "rtl" or dv == "ltr" or dv == "auto" {
+            a += " dir=\"" + dv + "\"";
+        }
+    }
     return a;
 }
 
@@ -167,8 +215,18 @@ fn text_html(n: map) -> string {
     return "<div" + attrs(n, base) + ">" + U.esc(U.s(n, "text")) + "</div>";
 }
 
+fn dir_attr_auto(n: map) -> string {
+    if U.prop(n, "dir") != null {
+        return "";
+    }
+    if i18n.is_rtl() {
+        return " dir=\"rtl\"";
+    }
+    return "";
+}
+
 fn navbar_html(n: map) -> string {
-    let h = "<div class=\"navbar\" role=\"banner\">";
+    let h = "<div class=\"navbar\" role=\"banner\"" + dir_attr_auto(n) + ">";
     if nav.can_pop() {
         h += "<button type=\"button\" class=\"nav-back\" aria-label=\"Back\" data-tap=\"" + br.slot((_ev) => nav.pop()) + "\">&#8249;</button>";
     }
@@ -183,7 +241,7 @@ fn tabbar_html(n: map) -> string {
         return "";
     }
     let active = U.ival(n, "active", 0);
-    let h = "<div class=\"tabbar\" role=\"tablist\">";
+    let h = "<div class=\"tabbar\" role=\"tablist\"" + dir_attr_auto(n) + ">";
     let i = 0;
     for t in tabs {
         let label = "";
@@ -198,12 +256,14 @@ fn tabbar_html(n: map) -> string {
         }
         let c = "tab";
         let sel = "false";
+        let tidx = "-1";
         if i == active {
             c += " active";
             sel = "true";
+            tidx = "0";
         }
         let idx = i;
-        h += "<button type=\"button\" class=\"" + c + "\" role=\"tab\" aria-selected=\"" + sel + "\" data-tap=\"" + br.slot((_ev) => nav.switch_tab(idx)) + "\">"
+        h += "<button type=\"button\" class=\"" + c + "\" role=\"tab\" aria-selected=\"" + sel + "\" tabindex=\"" + tidx + "\" data-tap=\"" + br.slot((_ev) => nav.switch_tab(idx)) + "\">"
         + "<span class=\"icon\">" + U.esc_icon(icon) + "</span><span>" + U.esc(label) + "</span></button>";
         i += 1;
     }
@@ -356,7 +416,7 @@ fn segmented_html(n: map) -> string {
     let opts = U.prop(n, "options");
     let active = U.ival(n, "active", 0);
     let dis = is_disabled(n);
-    let h = "<div" + attrs(n, "segmented") + " role=\"tablist\">";
+    let h = "<div" + attrs(n, "segmented") + dir_attr_auto(n) + " role=\"tablist\">";
     if opts != null and type_of(opts) == "list" {
         let idx = 0;
         for item in opts {
@@ -365,11 +425,13 @@ fn segmented_html(n: map) -> string {
             let ol = string(pair[1]);
             let sc = "seg-btn";
             let sel = "false";
+            let tidx = "-1";
             if idx == active {
                 sc += " active";
                 sel = "true";
+                tidx = "0";
             }
-            h += "<button type=\"button\" class=\"" + sc + "\" role=\"tab\" aria-selected=\"" + sel + "\"" + disabled_attr(n);
+            h += "<button type=\"button\" class=\"" + sc + "\" role=\"tab\" aria-selected=\"" + sel + "\" tabindex=\"" + tidx + "\"" + disabled_attr(n);
             if not dis {
                 h += " data-arg=\"" + string(idx) + "\" data-val=\"" + U.esc_attr(ov) + "\"" + ev_attr(n, "onChange", "tap");
             }
@@ -396,8 +458,18 @@ fn dialog_html(n: map) -> string {
     let wrap = {
         "el": "dialogwrap"
     };
+    let role_a = if U.prop(n, "role") == null {
+        " role=\"dialog\""
+    } else {
+        ""
+    };
+    let tab_a = if U.prop(n, "tabindex") == null {
+        " tabindex=\"-1\""
+    } else {
+        ""
+    };
     let h = "<div" + attrs(wrap, "dialog-wrap") + ev_attr(n, "onDismiss", "tap") + ">"
-    + "<div" + attrs(n, "dialog") + " role=\"dialog\" aria-modal=\"true\" data-stop-tap=\"1\">";
+    + "<div" + attrs(n, "dialog") + dir_attr_auto(n) + role_a + " aria-modal=\"true\"" + tab_a + " data-stop-tap=\"1\">";
     let t = U.s(n, "title");
     if t != "" {
         h += "<div class=\"dialog-title\">" + U.esc(t) + "</div>";
@@ -426,165 +498,291 @@ fn chip_html(n: map) -> string {
     return "<span" + attrs(n, c) + ">" + U.esc(U.s(n, "text")) + "</span>";
 }
 
-// ---------- main dispatcher ----------
+fn page_html(n: map) -> string {
+    let nav_h = "";
+    let body_h = "";
+    for c in kids(n) {
+        if type_of(c) == "map" and U.s(c, "el") == "navbar" {
+            nav_h += navbar_html(c);
+        } else {
+            body_h += node_html(c);
+        }
+    }
+    let cls = "page";
+    if nav_h != "" {
+        cls += " has-nav";
+    }
+    if U.prop(n, "flush") == true {
+        cls += " flush";
+    }
+    let key = "";
+    if U.prop(n, "pagekey") != null {
+        key = " data-pagekey=\"" + U.esc_attr(string(n["pagekey"])) + "\"";
+    }
+    return nav_h + "<div" + attrs(n, cls) + dir_attr_auto(n) + key + ">" + body_h + "</div>";
+}
+
+fn container_html(n: map) -> string {
+    let el = string(n["el"]);
+    return "<div" + attrs(n, el) + ev_attr_if(n, "onTap", "tap") + ">" + kids_html(n) + "</div>";
+}
+
+fn form_html(n: map) -> string {
+    return "<form" + attrs(n, "form") + ev_attr_if(n, "onSubmit", "submit") + ">" + kids_html(n) + "</form>";
+}
+
+fn spacer_html(n: map) -> string {
+    let sz = U.ival(n, "size", 8);
+    if sz <= 0 or U.prop(n, "flex") != null {
+        return "<div class=\"spacer grow\"></div>";
+    }
+    let px = string(sz);
+    return "<div class=\"spacer\" style=\"width:" + px + "px;height:" + px + "px;\"></div>";
+}
+
+fn divider_html(_n: map) -> string {
+    return "<hr class=\"divider\">";
+}
+
+fn button_html(n: map) -> string {
+    let btype = if U.s(n, "btn_type") == "submit" {
+        "submit"
+    } else {
+        "button"
+    };
+    return "<button type=\"" + btype + "\"" + attrs(n, "btn " + U.s(n, "variant")) + disabled_attr(n) + ev_attr_if(n, "onTap", "tap")
+    + "><span>" + U.esc(U.s(n, "text")) + "</span></button>";
+}
+
+fn iconbutton_html(n: map) -> string {
+    return "<button type=\"button\"" + attrs(n, "iconbtn " + U.s(n, "variant")) + disabled_attr(n) + ev_attr_if(n, "onTap", "tap")
+    + ">" + U.esc_icon(U.s(n, "icon")) + "</button>";
+}
+
+fn fab_html(n: map) -> string {
+    return "<button type=\"button\"" + attrs(n, "fab") + disabled_attr(n) + ev_attr_if(n, "onTap", "tap") + ">" + U.esc_icon(U.s(n, "icon")) + "</button>";
+}
+
+fn input_html(n: map) -> string {
+    return "<input" + attrs(n, "field") + " type=\"" + U.esc_attr(U.s(n, "kind"))
+    + "\" placeholder=\"" + U.esc_attr(U.s(n, "placeholder"))
+    + "\" value=\"" + U.esc_attr(U.s(n, "value")) + "\"" + disabled_attr(n)
+    + ev_attr_if(n, "onInput", "input")
+    + ev_attr_if(n, "onChange", "change")
+    + ev_attr_if(n, "onSubmit", "submit") + ">";
+}
+
+fn textarea_html(n: map) -> string {
+    return "<textarea" + attrs(n, "field") + " placeholder=\"" + U.esc_attr(U.s(n, "placeholder"))
+    + "\"" + disabled_attr(n) + ev_attr_if(n, "onInput", "input") + ev_attr_if(n, "onChange", "change") + ">" + U.esc(U.s(n, "value")) + "</textarea>";
+}
+
+fn slider_html(n: map) -> string {
+    return "<input" + attrs(n, "slider") + " type=\"range\" min=\"" + U.esc_attr(U.s(n, "min"))
+    + "\" max=\"" + U.esc_attr(U.s(n, "max")) + "\" value=\"" + U.esc_attr(U.s(n, "value"))
+    + "\"" + disabled_attr(n) + ev_attr_if(n, "onInput", "input") + ev_attr_if(n, "onChange", "change") + ">";
+}
+
+fn progress_html(n: map) -> string {
+    let fv = U.fval(n, "value", 0.0);
+    if fv < 0.0 {
+        fv = 0.0;
+    } elif fv > 1.0 {
+        fv = 1.0;
+    }
+    let pct = int(fv * 100.0 + 0.5);
+    return "<div" + attrs(n, "progress") + " role=\"progressbar\" aria-valuemin=\"0\" aria-valuemax=\"100\" aria-valuenow=\"" + string(pct) + "\"><div class=\"fill\" style=\"width:" + string(pct) + "%\"></div></div>";
+}
+
+fn image_html(n: map) -> string {
+    return "<img" + attrs(n, "img") + " src=\"" + U.esc_attr(U.safe_url(U.s(n, "src"))) + "\" alt=\"" + U.esc_attr(U.s(n, "alt")) + "\">";
+}
+
+fn avatar_html(n: map) -> string {
+    let safe_src = U.safe_url(U.s(n, "src"));
+    if safe_src != "" {
+        return "<div class=\"avatar\"><img src=\"" + U.esc_attr(safe_src) + "\" alt=\"\"></div>";
+    }
+    return "<div class=\"avatar\">" + U.esc(U.s(n, "label")) + "</div>";
+}
+
+fn badge_html(n: map) -> string {
+    return "<span" + attrs(n, "badge " + U.s(n, "color")) + ">" + U.esc(U.s(n, "text")) + "</span>";
+}
+
+fn card_html(n: map) -> string {
+    return "<div" + attrs(n, "card") + ev_attr(n, "onTap", "tap") + ">" + kids_html(n) + "</div>";
+}
+
+fn sheet_html(n: map) -> string {
+    let wrap = {
+        "el": "sheetwrap"
+    };
+    return "<div" + attrs(wrap, "sheet-wrap") + ev_attr(n, "onDismiss", "tap") + ">"
+    + "<div class=\"sheet\"" + dir_attr_auto(n) + " role=\"dialog\" aria-modal=\"true\" tabindex=\"-1\" data-stop-tap=\"1\">" + kids_html(n) + "</div></div>";
+}
+
+fn toast_html(n: map) -> string {
+    let tv = U.s(n, "variant");
+    if tv == "" {
+        tv = "info";
+    }
+    return "<div" + attrs(n, "toast " + tv) + " role=\"status\" aria-live=\"polite\"" + ev_attr_if(n, "onDismiss", "tap") + "><span>" + U.esc(U.s(n, "text")) + "</span></div>";
+}
+
+fn raw_html_node(n: map) -> string {
+    let raw_h = U.s(n, "raw");
+    if allow_raw_html {
+        return raw_h;
+    }
+    return U.sanitize_html(raw_h);
+}
+
+// ---------- main O(1) table dispatcher (A-25) ----------
+
+let render_table = null;
+
+fn dispatch_table() -> map {
+    if render_table == null {
+        render_table = {
+            "page": page_html,
+            "column": container_html,
+            "row": container_html,
+            "center": container_html,
+            "scroll": container_html,
+            "empty": container_html,
+            "grid": container_html,
+            "form": form_html,
+            "spacer": spacer_html,
+            "divider": divider_html,
+            "text": text_html,
+            "navbar": navbar_html,
+            "tabbar": tabbar_html,
+            "button": button_html,
+            "iconbutton": iconbutton_html,
+            "fab": fab_html,
+            "chip": chip_html,
+            "input": input_html,
+            "textarea": textarea_html,
+            "checkbox": checkbox_html,
+            "select": select_html,
+            "picker": select_html,
+            "segmented": segmented_html,
+            "spinner": spinner_html,
+            "slider": slider_html,
+            "toggle": toggle_html,
+            "progress": progress_html,
+            "image": image_html,
+            "avatar": avatar_html,
+            "badge": badge_html,
+            "card": card_html,
+            "listtile": tile_html,
+            "list": list_html,
+            "sheet": sheet_html,
+            "dialog": dialog_html,
+            "toast": toast_html,
+            "component": component_html,
+            "html": raw_html_node,
+        };
+    }
+    return render_table;
+}
 
 public fn node_html(n: map) -> string {
     let el = string(n["el"]);
-    if el == "page" {
-        let nav_h = "";
-        let body_h = "";
-        for c in kids(n) {
-            if type_of(c) == "map" and U.s(c, "el") == "navbar" {
-                nav_h += navbar_html(c);
-            } else {
-                body_h += node_html(c);
-            }
-        }
-        let cls = "page";
-        if nav_h != "" {
-            cls += " has-nav";
-        }
-        if U.prop(n, "flush") == true {
-            cls += " flush";
-        }
-        let key = "";
-        if U.prop(n, "pagekey") != null {
-            key = " data-pagekey=\"" + U.esc_attr(string(n["pagekey"])) + "\"";
-        }
-        return nav_h + "<div" + attrs(n, cls) + key + ">" + body_h + "</div>";
-    }
-    if el == "column" or el == "row" or el == "center" or el == "scroll" or el == "empty" or el == "grid" {
-        return "<div" + attrs(n, el) + ev_attr_if(n, "onTap", "tap") + ">" + kids_html(n) + "</div>";
-    }
-    if el == "form" {
-        return "<form" + attrs(n, "form") + ev_attr_if(n, "onSubmit", "submit") + ">" + kids_html(n) + "</form>";
-    }
-    if el == "spacer" {
-        let sz = U.ival(n, "size", 8);
-        if sz <= 0 or U.prop(n, "flex") != null {
-            return "<div class=\"spacer grow\"></div>";
-        }
-        let px = string(sz);
-        return "<div class=\"spacer\" style=\"width:" + px + "px;height:" + px + "px;\"></div>";
-    }
-    if el == "divider" {
-        return "<hr class=\"divider\">";
-    }
-    if el == "text" {
-        return text_html(n);
-    }
-    if el == "navbar" {
-        return navbar_html(n);
-    }
-    if el == "tabbar" {
-        return tabbar_html(n);
-    }
-    if el == "button" {
-        let btype = if U.s(n, "btn_type") == "submit" {
-            "submit"
-        } else {
-            "button"
-        };
-        return "<button type=\"" + btype + "\"" + attrs(n, "btn " + U.s(n, "variant")) + disabled_attr(n) + ev_attr_if(n, "onTap", "tap")
-        + "><span>" + U.esc(U.s(n, "text")) + "</span></button>";
-    }
-    if el == "iconbutton" {
-        return "<button type=\"button\"" + attrs(n, "iconbtn " + U.s(n, "variant")) + disabled_attr(n) + ev_attr_if(n, "onTap", "tap")
-        + ">" + U.esc_icon(U.s(n, "icon")) + "</button>";
-    }
-    if el == "fab" {
-        return "<button type=\"button\"" + attrs(n, "fab") + disabled_attr(n) + ev_attr_if(n, "onTap", "tap") + ">" + U.esc_icon(U.s(n, "icon")) + "</button>";
-    }
-    if el == "chip" {
-        return chip_html(n);
-    }
-    if el == "input" {
-        return "<input" + attrs(n, "field") + " type=\"" + U.esc_attr(U.s(n, "kind"))
-        + "\" placeholder=\"" + U.esc_attr(U.s(n, "placeholder"))
-        + "\" value=\"" + U.esc_attr(U.s(n, "value")) + "\"" + disabled_attr(n)
-        + ev_attr_if(n, "onInput", "input")
-        + ev_attr_if(n, "onChange", "change")
-        + ev_attr_if(n, "onSubmit", "submit") + ">";
-    }
-    if el == "textarea" {
-        return "<textarea" + attrs(n, "field") + " placeholder=\"" + U.esc_attr(U.s(n, "placeholder"))
-        + "\"" + disabled_attr(n) + ev_attr_if(n, "onInput", "input") + ev_attr_if(n, "onChange", "change") + ">" + U.esc(U.s(n, "value")) + "</textarea>";
-    }
-    if el == "checkbox" {
-        return checkbox_html(n);
-    }
-    if el == "select" or el == "picker" {
-        return select_html(n);
-    }
-    if el == "segmented" {
-        return segmented_html(n);
-    }
-    if el == "spinner" {
-        return spinner_html(n);
-    }
-    if el == "slider" {
-        return "<input" + attrs(n, "slider") + " type=\"range\" min=\"" + U.esc_attr(U.s(n, "min"))
-        + "\" max=\"" + U.esc_attr(U.s(n, "max")) + "\" value=\"" + U.esc_attr(U.s(n, "value"))
-        + "\"" + disabled_attr(n) + ev_attr_if(n, "onInput", "input") + ev_attr_if(n, "onChange", "change") + ">";
-    }
-    if el == "toggle" {
-        return toggle_html(n);
-    }
-    if el == "progress" {
-        let fv = U.fval(n, "value", 0.0);
-        if fv < 0.0 {
-            fv = 0.0;
-        } elif fv > 1.0 {
-            fv = 1.0;
-        }
-        let pct = int(fv * 100.0 + 0.5);
-        return "<div" + attrs(n, "progress") + " role=\"progressbar\" aria-valuemin=\"0\" aria-valuemax=\"100\" aria-valuenow=\"" + string(pct) + "\"><div class=\"fill\" style=\"width:" + string(pct) + "%\"></div></div>";
-    }
-    if el == "image" {
-        return "<img" + attrs(n, "img") + " src=\"" + U.esc_attr(U.safe_url(U.s(n, "src"))) + "\" alt=\"" + U.esc_attr(U.s(n, "alt")) + "\">";
-    }
-    if el == "avatar" {
-        let safe_src = U.safe_url(U.s(n, "src"));
-        if safe_src != "" {
-            return "<div class=\"avatar\"><img src=\"" + U.esc_attr(safe_src) + "\" alt=\"\"></div>";
-        }
-        return "<div class=\"avatar\">" + U.esc(U.s(n, "label")) + "</div>";
-    }
-    if el == "badge" {
-        return "<span" + attrs(n, "badge " + U.s(n, "color")) + ">" + U.esc(U.s(n, "text")) + "</span>";
-    }
-    if el == "card" {
-        return "<div" + attrs(n, "card") + ev_attr(n, "onTap", "tap") + ">" + kids_html(n) + "</div>";
-    }
-    if el == "listtile" {
-        return tile_html(n);
-    }
-    if el == "list" {
-        return list_html(n);
-    }
-    if el == "sheet" {
-        let wrap = {
-            "el": "sheetwrap"
-        };
-        let h = "<div" + attrs(wrap, "sheet-wrap") + ev_attr(n, "onDismiss", "tap") + ">"
-        + "<div class=\"sheet\" role=\"dialog\" aria-modal=\"true\" data-stop-tap=\"1\">" + kids_html(n) + "</div></div>";
-        return h;
-    }
-    if el == "dialog" {
-        return dialog_html(n);
-    }
-    if el == "toast" {
-        let tv = U.s(n, "variant");
-        if tv == "" {
-            tv = "info";
-        }
-        return "<div" + attrs(n, "toast " + tv) + " role=\"status\" aria-live=\"polite\"" + ev_attr_if(n, "onDismiss", "tap") + "><span>" + U.esc(U.s(n, "text")) + "</span></div>";
-    }
-    if el == "html" {
-        return U.s(n, "raw");
+    let tbl = dispatch_table();
+    if tbl.has(el) {
+        let f = tbl[el];
+        return f(n);
     }
     // unknown element: plain div passthrough
     return "<div" + attrs(n, "") + ">" + kids_html(n) + "</div>";
+}
+
+fn has_callable_val(v) -> bool {
+    let t = type_of(v);
+    if t == "function" or t == "closure" {
+        return true;
+    }
+    if t == "list" {
+        for item in v {
+            if has_callable_val(item) {
+                return true;
+            }
+        }
+    } elif t == "map" {
+        for (_k, mv) in v {
+            if has_callable_val(mv) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+fn has_ephemeral_slot_html(h: string) -> bool {
+    return h.contains("data-tap=\"f_") or h.contains("data-input=\"f_") or h.contains(
+        "data-change=\"f_"
+    ) or h.contains("data-submit=\"f_");
+}
+
+fn component_html(n: map) -> string {
+    let rfn = U.prop(n, "render");
+    if rfn == null {
+        return "";
+    }
+    let cname = U.s(n, "name");
+    let ckey = U.s(n, "key");
+    if ckey == "" {
+        ckey = cname;
+    }
+    let props = U.prop(n, "props");
+    if props == null or type_of(props) != "map" {
+        props = {
+        };
+    }
+    let use_memo = U.prop(n, "memo") == true;
+    let sig = "";
+    if use_memo and not has_callable_val(props) {
+        try {
+            sig = cname + "|" + ckey + "|" + i18n.locale() + "|" + json_write(props);
+        } catch (_e) {
+            sig = "";
+        }
+    }
+    if sig != "" and comp_cache.has(ckey) {
+        let ent = comp_cache[ckey];
+        if string(ent["sig"]) == sig {
+            comp_cache_hits += 1;
+            return string(ent["html"]);
+        }
+    }
+    comp_cache_misses += 1;
+    let child = rfn(U.deep_copy(props));
+    if child == null or type_of(child) != "map" {
+        return "";
+    }
+    let keyed_child = child;
+    if ckey != "" and (not child.has("key") or string(child["key"]) == "") {
+        let copy_c = {
+        };
+        for (ck, cv) in child {
+            copy_c[ck] = cv;
+        }
+        copy_c["key"] = ckey;
+        keyed_child = copy_c;
+    }
+    let html = node_html(keyed_child);
+    if sig != "" and not has_ephemeral_slot_html(html) {
+        if comp_cache.len() >= 256 {
+            comp_cache = {
+            };
+        }
+        comp_cache[ckey] = {
+            "sig": sig, "html": html
+        };
+    }
+    return html;
 }
 
 /// Render a full document body: page node + optional bottom tab bar chrome.
