@@ -4,6 +4,7 @@ var CACHE_NAME = CACHE_PREFIX + '{{APP_VERSION}}';
 var PRECACHE_URLS = [
   './',
   './index.html',
+  './offline.html',
   './manifest.json',
   './spid3r.js',
   './spid3r.wasm',
@@ -72,7 +73,13 @@ self.addEventListener('fetch', function(ev) {
       }
       return resp;
     }).catch(function() {
-      return caches.match(req);
+      return caches.match(req).then(function(cached) {
+        if (cached) { return cached; }
+        if (req.mode === 'navigate') {
+          return caches.match('./offline.html');
+        }
+        return undefined;
+      });
     })
   );
 });

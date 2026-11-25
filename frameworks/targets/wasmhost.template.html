@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob: https: appstudio:; connect-src {{APP_CSP_CONNECT_SRC}}; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: appstudio:; object-src 'none'; base-uri 'none'; form-action 'self';{{APP_CSP_EXTRA}}">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob: https: appstudio:; connect-src {{APP_CSP_CONNECT_SRC}}; script-src 'self' 'nonce-{{APP_CSP_NONCE}}' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: appstudio:; object-src 'none'; base-uri 'none'; form-action 'self'; require-trusted-types-for 'script'; trusted-types appstudio;{{APP_CSP_EXTRA}}">
 <title>{{APP_TITLE}}</title>
 {{APP_ICON_TAG}}
 {{APP_PWA_TAGS}}
@@ -13,6 +13,7 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
 #studio-busy.on{opacity:1;}
 @keyframes studio-busy-slide{0%{background-position:-40% 0;}100%{background-position:140% 0;}}
 #studio-offline{position:fixed;top:0;left:0;right:0;padding:6px 12px;font:600 12px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;text-align:center;background:#b45309;color:#ffffff;z-index:10001;display:none;}
+#studio-fallback{position:fixed;bottom:0;left:0;right:0;padding:4px 10px;font:500 11px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;text-align:center;background:#1e293b;color:#fde68a;z-index:9998;display:none;}
 #studio-boot{position:fixed;inset:auto 0 0 0;padding:10px 14px;font:12px/1.5 ui-monospace,monospace;background:#0b0f17;color:#7dd3fc;white-space:pre-wrap;z-index:9999;display:none;}
 </style>
 </head>
@@ -20,16 +21,35 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
 <div id="spid3r-root"></div>
 <div id="studio-busy" aria-hidden="true"></div>
 <div id="studio-offline" role="status" aria-live="polite">Offline — running from local cache</div>
+<div id="studio-fallback" role="status" aria-live="polite">Worker unavailable — running persistent VM on main thread</div>
 <div id="studio-boot">booting studio runtime…</div>
-<script src="spid3r.js"></script>
-<script>
+<script src="spid3r.js"{{SPID3R_JS_SRI}}></script>
+<script nonce="{{APP_CSP_NONCE}}">
 // ===== AppStudio wasm host (worker-backed stateless REPL protocol) =====
 // Evaluates app source + driver inside wasmworker.js (with main-thread fallback),
 // passing state/router/storage/theme/caps in and applying atomic @@STUDIO_FRAME@@ updates out.
 (function() {
+  var ttPolicy = null;
+  try {
+    if (typeof window !== 'undefined' && window.trustedTypes && typeof window.trustedTypes.createPolicy === 'function') {
+      ttPolicy = window.trustedTypes.createPolicy('appstudio', {
+        createHTML: function(s) { return String(s || ''); },
+        createScriptURL: function(s) { return String(s || ''); }
+      });
+      window.__studioTT = ttPolicy;
+    }
+  } catch (_tte) {}
+  function asTrustedHtml(s) {
+    return (ttPolicy && typeof ttPolicy.createHTML === 'function') ? ttPolicy.createHTML(s) : String(s || '');
+  }
+  function asTrustedScriptUrl(s) {
+    return (ttPolicy && typeof ttPolicy.createScriptURL === 'function') ? ttPolicy.createScriptURL(s) : String(s || '');
+  }
+
   var bootBox = document.getElementById('studio-boot');
   var busyBar = document.getElementById('studio-busy');
   var offlineBar = document.getElementById('studio-offline');
+  var fallbackBar = document.getElementById('studio-fallback');
   var busyTimer = null;
   function bootLog(s) { bootBox.style.display = 'block'; bootBox.textContent = s; }
   function bootHide() { bootBox.style.display = 'none'; }
@@ -172,6 +192,62 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
     }).catch(function() {});
   }
 
+  function openStorageIdb() {
+    return new Promise(function(resolve) {
+      if (typeof indexedDB === 'undefined') { resolve(null); return; }
+      try {
+        var req = indexedDB.open('appstudio_storage_v1', 1);
+        req.onupgradeneeded = function() {
+          try { req.result.createObjectStore('kv'); } catch (_e) {}
+        };
+        req.onsuccess = function() { resolve(req.result); };
+        req.onerror = function() { resolve(null); };
+      } catch (_e2) {
+        resolve(null);
+      }
+    });
+  }
+
+  function hydrateWebIndexedDb() {
+    if (detectPlatform() === 'ios' || typeof indexedDB === 'undefined') { return Promise.resolve(); }
+    return openStorageIdb().then(function(db) {
+      if (!db) { return; }
+      return new Promise(function(resolve) {
+        try {
+          var tx = db.transaction('kv', 'readonly');
+          var req = tx.objectStore('kv').get(STORAGE_KEY);
+          req.onsuccess = function() {
+            var val = req.result;
+            if (val && typeof val === 'object' && !Array.isArray(val)) {
+              envelope.storage = val;
+              writeLocalJson(STORAGE_KEY, val);
+            } else if (envelope.storage && typeof envelope.storage === 'object') {
+              mirrorWebIndexedDb(envelope.storage);
+            }
+            resolve();
+          };
+          req.onerror = function() { resolve(); };
+        } catch (_e) { resolve(); }
+      });
+    }).catch(function() {});
+  }
+
+  function mirrorWebIndexedDb(val) {
+    if (detectPlatform() === 'ios' || typeof indexedDB === 'undefined') { return; }
+    openStorageIdb().then(function(db) {
+      if (!db) { return; }
+      try {
+        var tx = db.transaction('kv', 'readwrite');
+        var store = tx.objectStore('kv');
+        if (val && typeof val === 'object' && !Array.isArray(val)) {
+          store.put(val, STORAGE_KEY);
+        } else {
+          store.delete(STORAGE_KEY);
+        }
+      } catch (_e) {}
+    }).catch(function() {});
+  }
+
   function resolveSourceLine(flatLine) {
     if (!flatLine || flatLine <= 0) { return Promise.resolve(''); }
     var lookup = function(mapArr) {
@@ -267,11 +343,18 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
         open_url: true,
         haptic: hasIosNative || (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function'),
         secure_store: hasIosNative || hasAndroidNative || hasWebCrypto,
-        durable_storage: hasIosNative || (typeof localStorage !== 'undefined'),
+        durable_storage: hasIosNative || (typeof indexedDB !== 'undefined') || (typeof localStorage !== 'undefined'),
         files: true,
         share: hasIosNative || hasAndroidNative || (typeof navigator !== 'undefined' && typeof navigator.share === 'function'),
         auth: true,
-        deep_link: true
+        deep_link: true,
+        geolocation: hasIosNative || hasAndroidNative || (typeof navigator !== 'undefined' && !!navigator.geolocation),
+        biometrics: hasIosNative || hasAndroidNative || (typeof window !== 'undefined' && typeof window.PublicKeyCredential === 'function'),
+        camera: hasIosNative || hasAndroidNative || (typeof navigator !== 'undefined' && !!navigator.mediaDevices),
+        notifications: hasIosNative || hasAndroidNative || (typeof window !== 'undefined' && typeof window.Notification === 'function'),
+        contacts: hasIosNative || hasAndroidNative || (typeof navigator !== 'undefined' && !!navigator.contacts),
+        bluetooth: hasIosNative || hasAndroidNative || (typeof navigator !== 'undefined' && !!navigator.bluetooth),
+        background_task: hasIosNative || hasAndroidNative || (typeof navigator !== 'undefined' && !!navigator.serviceWorker)
       }
     };
   }
@@ -424,7 +507,7 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
       if (window.__studio && typeof window.__studio.patch === 'function') {
         window.__studio.patch(frame.html, rootEl);
       } else if (rootEl) {
-        rootEl.innerHTML = frame.html;
+        rootEl.innerHTML = asTrustedHtml(frame.html);
       }
     }
     if (typeof frame.title === 'string' && frame.title !== '') {
@@ -441,6 +524,7 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
     if (nextSv !== lastStoragePersisted) {
       writeLocalJson(STORAGE_KEY, envelope.storage);
       mirrorDurableStorage(envelope.storage);
+      mirrorWebIndexedDb(envelope.storage);
       lastStoragePersisted = nextSv;
     }
     storageVersion = nextSv;
@@ -460,6 +544,15 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
   }
 
   async function initMainThreadFallback() {
+    if (typeof window !== 'undefined') {
+      window.__studioWorkerFallback = true;
+      if (fallbackBar && (detectPlatform() === 'ios' || window.__studioShowFallbackBanner === true)) {
+        fallbackBar.style.display = 'block';
+      }
+    }
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('[AppStudio] Web Worker unavailable — running persistent evalSession on main thread');
+    }
     bootLog('loading studio wasm runtime…');
     if (typeof Spid3r === 'undefined') { throw new Error('spid3r.js missing'); }
     sp = await Spid3r.init('spid3r.wasm');
@@ -485,7 +578,7 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
         if (!settled) { settled = true; resolve(false); }
       }
       try {
-        w = new Worker('wasmworker.js');
+        w = new Worker(asTrustedScriptUrl('wasmworker.js'));
       } catch (_we) {
         resolve(false);
         return;
@@ -526,6 +619,7 @@ html,body{margin:0;padding:0;height:100%;background:#f4f5fb;}
     try {
       bootLog('loading studio wasm worker…');
       await hydrateDurableIosStorage();
+      await hydrateWebIndexedDb();
       appSrc = await fetchText('app.matrix');
       eventQueue.unshift(null);
       var ok = await startWorker();

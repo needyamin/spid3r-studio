@@ -20,7 +20,21 @@ let host_caps = {
     "prefers_dark": false,
     "viewport_width": 0,
     "capabilities": {
-        "clipboard": true, "open_url": true, "haptic": true, "secure_store": true, "files": true, "share": true, "auth": true, "deep_link": true
+        "clipboard": true,
+        "open_url": true,
+        "haptic": true,
+        "secure_store": true,
+        "files": true,
+        "share": true,
+        "auth": true,
+        "deep_link": true,
+        "geolocation": true,
+        "biometrics": true,
+        "camera": true,
+        "notifications": true,
+        "contacts": true,
+        "bluetooth": true,
+        "background_task": true
     }
     ,
 };
@@ -517,6 +531,95 @@ public fn start_auth(url: string, redirect_scheme: string, cb: string) -> bool {
         "kind": "auth.open",
         "url": u,
         "redirect_scheme": redirect_scheme.trim().lower(),
+        "cb": cb.trim(),
+    });
+    return true;
+}
+
+/// Request current device geolocation coordinates via named callback cb (A-05).
+public fn request_geolocation(cb: string) -> bool {
+    if cb.trim() == "" {
+        return false;
+    }
+    enqueue_effect({
+        "kind": "geo.get", "cb": cb.trim()
+    });
+    return true;
+}
+
+/// Request biometric authentication (Face ID / Touch ID / Android Biometric / WebAuthn) (A-05).
+public fn authenticate_biometrics(reason: string, cb: string) -> bool {
+    if cb.trim() == "" {
+        return false;
+    }
+    enqueue_effect({
+        "kind": "biometrics.auth", "reason": reason.trim(), "cb": cb.trim()
+    });
+    return true;
+}
+
+/// Request camera capture via named callback cb (A-05).
+public fn capture_camera(cb: string, facing: string = "environment") -> bool {
+    if cb.trim() == "" {
+        return false;
+    }
+    let f = if facing.trim().lower() == "user" {
+        "user"
+    } else {
+        "environment"
+    };
+    enqueue_effect({
+        "kind": "camera.capture", "facing": f, "cb": cb.trim()
+    });
+    return true;
+}
+
+/// Show a local notification via host notification center (A-05).
+public fn notify(title: string, body: string, cb: string = "") -> bool {
+    if title.trim() == "" and body.trim() == "" {
+        return false;
+    }
+    enqueue_effect({
+        "kind": "notifications.show", "title": title, "body": body, "cb": cb.trim()
+    });
+    return true;
+}
+
+/// Pick a contact from the device contacts picker via named callback cb (A-05).
+public fn pick_contact(cb: string) -> bool {
+    if cb.trim() == "" {
+        return false;
+    }
+    enqueue_effect({
+        "kind": "contacts.pick", "cb": cb.trim()
+    });
+    return true;
+}
+
+/// Scan nearby Bluetooth Low Energy peripherals via named callback cb (A-05).
+public fn ble_scan(service_uuid: string, cb: string) -> bool {
+    if cb.trim() == "" {
+        return false;
+    }
+    enqueue_effect({
+        "kind": "ble.scan", "service_uuid": service_uuid.trim(), "cb": cb.trim()
+    });
+    return true;
+}
+
+/// Schedule a periodic background task on supported hosts (A-05).
+public fn schedule_background_task(
+    task_id: string,
+    interval_sec: int,
+    cb: string = ""
+) -> bool {
+    if task_id.trim() == "" or interval_sec <= 0 {
+        return false;
+    }
+    enqueue_effect({
+        "kind": "background.schedule",
+        "task_id": task_id.trim(),
+        "interval_sec": interval_sec,
         "cb": cb.trim(),
     });
     return true;

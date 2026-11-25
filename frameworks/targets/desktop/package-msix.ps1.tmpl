@@ -1,0 +1,20 @@
+param(
+  [string]$OutDir = ".",
+  [string]$CertPfx = $env:STUDIO_MSIX_PFX,
+  [string]$CertPassword = $env:STUDIO_MSIX_PFX_PASSWORD
+)
+$ErrorActionPreference = "Stop"
+$stage = Join-Path $OutDir "msix_stage"
+New-Item -ItemType Directory -Force -Path $stage | Out-Null
+Copy-Item (Join-Path $OutDir "{{EXEC_NAME}}") (Join-Path $stage "{{EXEC_NAME}}") -Force
+Copy-Item (Join-Path $PSScriptRoot "AppxManifest.xml") (Join-Path $stage "AppxManifest.xml") -Force
+$msixOut = Join-Path $OutDir "{{SAFE_NAME}}-{{APP_VERSION}}.msix"
+makeappx pack /o /d $stage /p $msixOut
+if ($CertPfx) {
+  if ($CertPassword) {
+    signtool sign /fd SHA256 /f $CertPfx /p $CertPassword /tr http://timestamp.digicert.com /td SHA256 $msixOut
+  } else {
+    signtool sign /fd SHA256 /f $CertPfx /tr http://timestamp.digicert.com /td SHA256 $msixOut
+  }
+}
+Write-Output "Created MSIX: $msixOut"

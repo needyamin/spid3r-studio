@@ -138,10 +138,11 @@ public fn build(
     let t_pkg = fs.render_template("targets/ios/Package.swift.tmpl", vars);
     let t_app = fs.render_template("targets/ios/App.swift.tmpl", vars);
     let t_plist = fs.render_template("targets/ios/Info.plist.tmpl", vars);
+    let t_launch = fs.render_template("targets/ios/LaunchScreen.storyboard.tmpl", vars);
     let t_ent = fs.render_template("targets/ios/Entitlements.plist.tmpl", vars);
     let t_xtool = fs.render_template("targets/ios/xtool.yml.tmpl", vars);
     let t_readme = fs.render_template("targets/ios/README.md.tmpl", vars);
-    if t_pkg == "" or t_app == "" or t_plist == "" or t_ent == "" or t_xtool == "" or t_readme == "" {
+    if t_pkg == "" or t_app == "" or t_plist == "" or t_launch == "" or t_ent == "" or t_xtool == "" or t_readme == "" {
         return 1;
     }
     if not fs.write_checked(pkg + "/Package.swift", t_pkg) {
@@ -151,6 +152,9 @@ public fn build(
         return 1;
     }
     if not fs.write_checked(pkg + "/Info.plist", t_plist) {
+        return 1;
+    }
+    if not fs.write_checked(pkg + "/LaunchScreen.storyboard", t_launch) {
         return 1;
     }
     if not fs.write_checked(pkg + "/Entitlements.plist", t_ent) {

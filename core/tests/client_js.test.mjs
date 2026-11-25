@@ -28,13 +28,14 @@ function extractClientJs() {
 
 function extractWasmHostJs(clientJs) {
   const html = fs.readFileSync(path.join(ROOT, 'frameworks/targets/wasmhost.template.html'), 'utf8');
-  const openTag = '<script>\n// ===== AppStudio wasm host';
-  const start = html.indexOf(openTag);
-  assert.ok(start >= 0, 'wasmhost.template.html must contain host script block');
+  const openTagRegex = /<script(?:\s+nonce="[^"]*")?>\r?\n\/\/ ===== AppStudio wasm host/;
+  const m = openTagRegex.exec(html);
+  assert.ok(m, 'wasmhost.template.html must contain host script block');
+  const start = m.index + m[0].indexOf('// ===== AppStudio wasm host');
   const end = html.indexOf('</script>', start);
   assert.ok(end > start, 'wasmhost.template.html must close script block');
   return html
-    .slice(start + '<script>\n'.length, end)
+    .slice(start, end)
     .replace('{{APP_BUNDLE_ID_JSON}}', JSON.stringify('sh.test.app'))
     .replace('{{APP_THEME_JSON}}', JSON.stringify({ mode: 'light' }))
     .replace('{{CLIENT_JS}}', clientJs);
@@ -534,6 +535,7 @@ function createDomEnv(opts = {}) {
     console,
     fetch: opts.fetch || undefined,
     Spid3r: opts.Spid3r || undefined,
+    indexedDB: opts.indexedDB || undefined,
     crypto: globalThis.crypto,
     TextEncoder,
     TextDecoder,
@@ -1441,7 +1443,158 @@ test('spid3r.wasm A-03 & BUG-12: persistent evalSession runs demo bundle without
     const frame2 = JSON.parse(f2Lines[idx2 + 1]);
     assert.equal(frame2.frame_epoch, 2, 'frame 2 advances epoch');
     assert.equal(frame2.router.active, 1, 'persistent session switched active tab to Stats');
+
+    // A-30: Automated WCAG / ARIA structural accessibility audit on rendered demo HTML
+    const html1 = String(frame1.html || '');
+    assert.ok(html1.includes('role="banner"'), 'A-30 demo renders banner landmark');
+    assert.ok(html1.includes('role="tablist"') && html1.includes('role="tab"'), 'A-30 demo renders tablist/tab ARIA roles');
+    assert.ok(html1.includes('aria-selected="true"') && html1.includes('aria-selected="false"'), 'A-30 tabs expose aria-selected');
+    assert.ok(html1.includes('aria-label='), 'A-30 icon buttons carry aria-label');
+    assert.ok(!/<img(?![^>]*\balt=)[^>]*>/i.test(html1), 'A-30 every img tag carries an alt attribute');
+
+    // A-12, A-20, A-31: Verify BuildWeb outputs nonce CSP, SRI, offline.html, and 192/512 PNG icons
+    const builtHtml = fs.readFileSync(path.join(tmpOut, 'web/index.html'), 'utf8');
+    assert.ok(/script-src 'self' 'nonce-[^']+' 'wasm-unsafe-eval'/.test(builtHtml), 'A-12/A-31 built index.html enforces script nonce');
+    assert.ok(!/script-src[^;]*'unsafe-inline'/.test(builtHtml), 'A-12/A-31 built index.html omits unsafe-inline in script-src');
+    assert.ok(builtHtml.includes('require-trusted-types-for \'script\''), 'A-31 built index.html enforces Trusted Types');
+    assert.ok(/<script src="spid3r\.js" integrity="sha256-[^"]+"/.test(builtHtml), 'A-31 built index.html attaches SRI to spid3r.js');
+    assert.ok(fs.existsSync(path.join(tmpOut, 'web/offline.html')), 'A-20 BuildWeb emits offline.html');
+    assert.ok(fs.existsSync(path.join(tmpOut, 'web/icon-192.png')), 'A-20 BuildWeb emits icon-192.png');
+    assert.ok(fs.existsSync(path.join(tmpOut, 'web/icon-512.png')), 'A-20 BuildWeb emits icon-512.png');
+    const pwaManifest = JSON.parse(fs.readFileSync(path.join(tmpOut, 'web/manifest.json'), 'utf8'));
+    assert.equal(pwaManifest.icons.length, 4, 'A-20 manifest emits separate 192/512 any and maskable icons');
   } finally {
     fs.rmSync(tmpOut, { recursive: true, force: true });
   }
+});
+
+test('ClientJS A-22: standalone frameworks/studio/client.js matches ClientJS.matrix exactly', () => {
+  const standalone = fs.readFileSync(path.join(ROOT, 'frameworks/studio/client.js'), 'utf8');
+  assert.equal(standalone, extractClientJs(), 'client.js is byte-for-byte synced with ClientJS.matrix');
+});
+
+test('wasmhost A-16 & A-26: worker fallback sets observable indicator and IndexedDB hydrates/mirrors storage', async () => {
+  const clientJs = extractClientJs();
+  const hostJs = extractWasmHostJs(clientJs);
+  const idbData = new Map();
+  let fakeDb = {
+    transaction() {
+      return {
+        objectStore() {
+          return {
+            get(k) {
+              const req = { result: idbData.get(k), onsuccess: null, onerror: null };
+              setTimeout(() => req.onsuccess && req.onsuccess(), 0);
+              return req;
+            },
+            put(v, k) {
+              idbData.set(k, v);
+              return { onsuccess: null, onerror: null };
+            },
+            delete(k) {
+              idbData.delete(k);
+              return { onsuccess: null, onerror: null };
+            },
+          };
+        },
+      };
+    },
+  };
+  idbData.set('studio:storage:sh.test.app', { fromIdb: 'ok' });
+
+  let seenBootStorage = null;
+  let nextSv = 1;
+  const fallbackEl = { style: { display: 'none' } };
+  const env = createDomEnv({
+    indexedDB: {
+      open() {
+        const req = { result: fakeDb, onupgradeneeded: null, onsuccess: null, onerror: null };
+        setTimeout(() => req.onsuccess && req.onsuccess(), 0);
+        return req;
+      },
+    },
+    fetch: async () => ({
+      ok: true,
+      async text() {
+        return 'let STUDIO_EVENT_JSON = "";\nfn main() -> int { return 0; }\n';
+      },
+    }),
+    Spid3r: {
+      async init() {
+        return {
+          eval(src) {
+            const m = src.match(/let STUDIO_EVENT_JSON = ("(?:\\.|[^"])*");/);
+            if (m) {
+              const ev = JSON.parse(JSON.parse(m[1].replace(/\\\{/g, '{').replace(/\\\}/g, '}')));
+              if (seenBootStorage === null) seenBootStorage = ev.storage;
+            }
+            return {
+              ok: true,
+              stdout:
+                '@@STUDIO_FRAME@@\n' +
+                JSON.stringify({
+                  css: '',
+                  theme_version: 1,
+                  storage_version: nextSv,
+                  html: '<div class="page" data-pagekey="Home">IDB</div>',
+                  html_hash: 'h1',
+                  slot_nonce: 'n1',
+                  frame_epoch: 1,
+                  title: 'IDBTest',
+                  router: { active: 0, stacks: [[{ name: 'Home', params: {} }]] },
+                  state: {},
+                  storage: { fromIdb: 'ok', updated: nextSv },
+                  theme: { mode: 'light' },
+                  effects: [],
+                }) +
+                '\n',
+            };
+          },
+        };
+      },
+    },
+  });
+  env.sandbox.window.__studioShowFallbackBanner = true;
+  const origById = env.document.getElementById.bind(env.document);
+  env.document.getElementById = (id) => (id === 'studio-fallback' ? fallbackEl : origById(id));
+
+  vm.runInContext(hostJs, env.sandbox);
+  await new Promise((r) => setTimeout(r, 90));
+
+  assert.equal(env.sandbox.window.__studioWorkerFallback, true, 'A-16 marks __studioWorkerFallback when Worker absent');
+  assert.equal(fallbackEl.style.display, 'block', 'A-16 shows fallback banner when enabled');
+  assert.deepEqual(seenBootStorage, { fromIdb: 'ok' }, 'A-26 hydrates envelope.storage from IndexedDB');
+  assert.equal(idbData.get('studio:storage:sh.test.app').updated, 1, 'A-26 mirrors storage updates to IndexedDB');
+});
+
+test('ClientJS A-05: dispatches geolocation, biometrics, camera, notifications, contacts, BLE, and background effects', async () => {
+  const iosCalls = [];
+  const env = createDomEnv({
+    webkit: {
+      messageHandlers: {
+        studioNative: {
+          postMessage(msg) { iosCalls.push(msg); },
+        },
+      },
+    },
+  });
+  vm.runInContext(extractClientJs(), env.sandbox);
+  env.window.__studio.runEffects([
+    { kind: 'geo.get', cb: 'on_geo' },
+    { kind: 'biometrics.auth', reason: 'Confirm', cb: 'on_bio' },
+    { kind: 'camera.capture', facing: 'user', cb: 'on_cam' },
+    { kind: 'notifications.show', title: 'Hi', body: 'World', cb: 'on_notif' },
+    { kind: 'contacts.pick', cb: 'on_contact' },
+    { kind: 'ble.scan', service_uuid: '180d', cb: 'on_ble' },
+    { kind: 'background.schedule', task_id: 'sync', interval_sec: 120, cb: 'on_bg' },
+  ]);
+  assert.deepEqual(
+    iosCalls.map((c) => c.action),
+    ['geo_get', 'biometrics_auth', 'camera_capture', 'notifications_show', 'contacts_pick', 'ble_scan', 'background_schedule']
+  );
+
+  // Trigger native callback for biometrics and verify IPC event
+  env.window.__studioNativeCallback(iosCalls[1].id, { ok: true });
+  const bioEvent = env.ipcMessages.map((m) => JSON.parse(m.payload)).find((p) => p.sid === 'on_bio');
+  assert.ok(bioEvent && bioEvent.ok === true, 'A-05 native callback dispatches result back to Spid3r handler');
 });

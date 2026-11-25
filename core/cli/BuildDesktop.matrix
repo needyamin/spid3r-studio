@@ -76,6 +76,70 @@ public fn build(
         return 1;
     }
     if release {
+        let pkg_dir = outdir + "/packaging";
+        fs.ensure_dir(pkg_dir);
+        let safe_name = fs.sanitize_swift_ident(name);
+        let bid = man.app_bundle_id_of(appdir);
+        let exec_name = name + ext;
+        let ver4 = ver + ".0";
+        if ver.split(".").len() >= 4 {
+            ver4 = ver;
+        }
+        let art_sha = ex.sha256_file(out_bin);
+        let plat_lbl = if fs.is_windows() {
+            "windows"
+        } elif fs.is_macos() {
+            "macos"
+        } else {
+            "linux"
+        };
+        let pvars = {
+            "APP_NAME": name,
+            "APP_NAME_XML": fs.html_escape(name),
+            "APP_NAME_JSON": name.replace("\"", "\\\""),
+            "SAFE_NAME": safe_name,
+            "BUNDLE_ID": bid,
+            "BUNDLE_ID_XML": fs.html_escape(bid),
+            "BUNDLE_ID_JSON": bid.replace("\"", "\\\""),
+            "APP_VERSION": ver,
+            "APP_VERSION_4": ver4,
+            "APP_VERSION_XML": fs.html_escape(ver),
+            "APP_VERSION_JSON": ver.replace("\"", "\\\""),
+            "EXEC_NAME": exec_name,
+            "EXEC_NAME_XML": fs.html_escape(exec_name),
+            "EXEC_NAME_JSON": exec_name.replace("\"", "\\\""),
+            "PLATFORM_JSON": plat_lbl,
+            "ARTIFACT_SHA256": art_sha,
+        };
+        let feed = fs.render_template("targets/desktop/update-feed.json.tmpl", pvars);
+        if feed != "" {
+            let _uf = fs.write_checked(outdir + "/update-feed.json", feed);
+        }
+        if fs.is_windows() {
+            let am = fs.render_template("targets/desktop/AppxManifest.xml.tmpl", pvars);
+            let ps = fs.render_template("targets/desktop/package-msix.ps1.tmpl", pvars);
+            if am != "" {
+                let _wa = fs.write_checked(pkg_dir + "/AppxManifest.xml", am);
+            }
+            if ps != "" {
+                let _wp = fs.write_checked(pkg_dir + "/package-msix.ps1", ps);
+            }
+        } elif fs.is_macos() {
+            let pl = fs.render_template("targets/desktop/Info.plist.tmpl", pvars);
+            let sh = fs.render_template("targets/desktop/package-dmg.sh.tmpl", pvars);
+            if pl != "" {
+                let _wl = fs.write_checked(pkg_dir + "/Info.plist", pl);
+            }
+            if sh != "" {
+                let _ws = fs.write_checked(pkg_dir + "/package-dmg.sh", sh);
+            }
+        } else {
+            let dt = fs.render_template("targets/desktop/app.desktop.tmpl", pvars);
+            if dt != "" {
+                let _wd = fs.write_checked(pkg_dir + "/" + safe_name + ".desktop", dt);
+            }
+        }
+
         let sign_env = env("STUDIO_DESKTOP_SIGN_CMD");
         if string(sign_env) != "none" {
             let sign_cmd = string(sign_env.unwrap()).trim();

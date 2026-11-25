@@ -44,12 +44,15 @@ public fn build(
     let app_dir = proj + "/app";
     let main_dir = app_dir + "/src/main";
     let java_dir = main_dir + "/java/" + pkg_dir;
+    let test_java_dir = app_dir + "/src/test/java/" + pkg_dir;
     let assets_dir = main_dir + "/assets";
     fs.ensure_dir(proj);
     fs.ensure_dir(app_dir);
     fs.ensure_dir(app_dir + "/src");
+    fs.ensure_dir(app_dir + "/src/test");
     fs.ensure_dir(main_dir);
     fs.ensure_dir(java_dir);
+    fs.ensure_dir(test_java_dir);
     fs.ensure_dir(assets_dir);
 
     if b_web.copy_wasm_assets(rt_assets, assets_dir) != 0 {
@@ -139,11 +142,12 @@ public fn build(
     let t_manifest = fs.render_template("targets/android/AndroidManifest.xml.tmpl", vars);
     let t_netsec = fs.render_template("targets/android/network_security_config.xml.tmpl", vars);
     let t_activity = fs.render_template("targets/android/MainActivity.kt.tmpl", vars);
+    let t_activity_test = fs.render_template("targets/android/MainActivityTest.kt.tmpl", vars);
     let t_wrap_props = fs.render_template("targets/android/gradle-wrapper.properties.tmpl", vars);
     let t_gradlew = fs.render_template("targets/android/gradlew.tmpl", vars);
     let t_gradlew_bat = fs.render_template("targets/android/gradlew.bat.tmpl", vars);
     let t_readme = fs.render_template("targets/android/README.md.tmpl", vars);
-    if t_settings == "" or t_root_gradle == "" or t_props == "" or t_app_gradle == "" or t_proguard == "" or t_manifest == "" or t_netsec == "" or t_activity == "" or t_wrap_props == "" or t_gradlew == "" or t_gradlew_bat == "" or t_readme == "" {
+    if t_settings == "" or t_root_gradle == "" or t_props == "" or t_app_gradle == "" or t_proguard == "" or t_manifest == "" or t_netsec == "" or t_activity == "" or t_activity_test == "" or t_wrap_props == "" or t_gradlew == "" or t_gradlew_bat == "" or t_readme == "" {
         return 1;
     }
 
@@ -181,6 +185,9 @@ public fn build(
         return 1;
     }
     if not fs.write_checked(java_dir + "/MainActivity.kt", t_activity) {
+        return 1;
+    }
+    if not fs.write_checked(test_java_dir + "/MainActivityTest.kt", t_activity_test) {
         return 1;
     }
     if not man.emit_sbom(appdir, proj, "android", release) {

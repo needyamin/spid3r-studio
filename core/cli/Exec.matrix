@@ -151,6 +151,136 @@ public fn sha256_file(path: string) -> string {
     return "";
 }
 
+/// Compute base64-encoded SHA-256 digest of a file on disk for HTML SRI attributes (A-31).
+public fn sha256_base64_file(path: string) -> string {
+    let hex = sha256_file(path);
+    if hex == "" {
+        return "";
+    }
+    let py_cmd = if fs.is_windows() {
+        "python"
+    } else {
+        "python3"
+    };
+    let rp = exec_capture(
+        py_cmd,
+        ["-c",
+        "import base64,hashlib,sys;print(base64.b64encode(hashlib.sha256(open(sys.argv[1],'rb').read()).digest()).decode())",
+        path],
+        null
+    );
+    if rp.is_ok() and int(rp.unwrap()["code"]) == 0 {
+        let b64 = string(rp.unwrap()["stdout"]).trim();
+        if b64 != "" {
+            return b64;
+        }
+    }
+    let ro = exec_capture("openssl", ["dgst", "-sha256", "-binary", path], null);
+    if ro.is_ok() and int(ro.unwrap()["code"]) == 0 {
+        // Fallback when python is absent: try openssl base64 pipeline via shell
+        let sh_cmd = if fs.is_windows() {
+            "powershell"
+        } else {
+            "sh"
+        };
+        let args = if fs.is_windows() {
+            ["-NoProfile",
+            "-Command",
+            "[Convert]::ToBase64String([System.Security.Cryptography.SHA256]::Create().ComputeHash([System.IO.File]::ReadAllBytes('" + path.replace("'", "''") + "')))"]
+        } else {
+            ["-c",
+            "openssl dgst -sha256 -binary \"$1\" | base64",
+            "_",
+            path]
+        };
+        let rs = exec_capture(sh_cmd, args, null);
+        if rs.is_ok() and int(rs.unwrap()["code"]) == 0 {
+            let out = string(rs.unwrap()["stdout"]).trim();
+            if out != "" {
+                return out;
+            }
+        }
+    }
+    return "";
+}
+
+/// Format an integrity="sha256-..." attribute for an emitted local script asset (A-31).
+public fn sri_sha256_attr(path: string) -> string {
+    let b64 = sha256_base64_file(path);
+    if b64 == "" {
+        return "";
+    }
+    return " integrity=\"sha256-" + b64 + "\"";
+}
+
+/// Verify downloads/packages/catalog.json against catalog.json.sha256 and optional detached OpenSSL sig (A-14).
+public fn verify_catalog_signature(
+    cat_path_in: string = "",
+    sidecar_path_in: string = ""
+) -> bool {
+    let dl_pkg = fs.join_dir(fs.downloads_dir(), "packages");
+    let cat_path = if cat_path_in != "" {
+        cat_path_in
+    } else {
+        fs.join_dir(dl_pkg, "catalog.json")
+    };
+    let side_path = if sidecar_path_in != "" {
+        sidecar_path_in
+    } else {
+        cat_path + ".sha256"
+    };
+    if not file_exists(cat_path) or not file_exists(side_path) {
+        println("error[security]: missing catalog.json or catalog.json.sha256");
+        return false;
+    }
+    let sr = read_file(side_path);
+    if sr.is_err() {
+        println("error[security]: cannot read " + side_path);
+        return false;
+    }
+    let expected = "";
+    for row in string(sr.unwrap()).split("\n") {
+        let t = string(row).replace("\r", "").trim();
+        if t == "" {
+            continue;
+        }
+        let toks = t.split(" ");
+        if toks.len() > 0 and is_hex_sha256(string(toks[0])) {
+            expected = string(toks[0]).trim().lower();
+            break;
+        }
+    }
+    if expected == "" {
+        println("error[security]: invalid SHA-256 entry in " + side_path);
+        return false;
+    }
+    if not verify_sha256(cat_path, expected, "catalog.json") {
+        return false;
+    }
+    let sig_path = cat_path + ".sig";
+    let pub_path = fs.join_dir(dl_pkg, "catalog.pub.pem");
+    if file_exists(sig_path) and file_exists(pub_path) {
+        let vr = exec_capture(
+            "openssl",
+            ["dgst",
+            "-sha256",
+            "-verify",
+            pub_path,
+            "-signature",
+            sig_path,
+            cat_path],
+            null
+        );
+        if vr.is_err() or int(vr.unwrap()["code"]) != 0 {
+            println(
+                "error[security]: detached OpenSSL signature verification failed for catalog.json"
+            );
+            return false;
+        }
+    }
+    return true;
+}
+
 /// Verify a file's SHA-256 digest against an expected 64-hex string (A-14).
 public fn verify_sha256(path: string, expected: string, label: string) -> bool {
     let exp = string(expected).trim().lower();

@@ -338,14 +338,28 @@ public fn runtime_js() -> string {
     return oldNode;
   }
 
+  function ttHtml(s) {
+    var p = (typeof window !== 'undefined') ? window.__studioTT : null;
+    if (!p && typeof window !== 'undefined' && window.trustedTypes && typeof window.trustedTypes.createPolicy === 'function') {
+      try {
+        p = window.trustedTypes.createPolicy('appstudio', {
+          createHTML: function(v) { return String(v || ''); },
+          createScriptURL: function(v) { return String(v || ''); }
+        });
+        window.__studioTT = p;
+      } catch (_e) {}
+    }
+    return (p && typeof p.createHTML === 'function') ? p.createHTML(String(s || '')) : String(s || '');
+  }
+
   function parseHtml(html) {
     var tpl = document.createElement('template');
     if (tpl && tpl.content) {
-      tpl.innerHTML = String(html || '');
+      tpl.innerHTML = ttHtml(html);
       return tpl.content;
     }
     var box = document.createElement('div');
-    box.innerHTML = String(html || '');
+    box.innerHTML = ttHtml(html);
     return box;
   }
 
@@ -410,7 +424,7 @@ public fn runtime_js() -> string {
     var activeRec = captureActive(root) || caretState;
     var incoming = parseHtml(html);
     if (!incoming) {
-      root.innerHTML = String(html || '');
+      root.innerHTML = ttHtml(html);
       return;
     }
     var nextPage = incoming.querySelector ? incoming.querySelector('.page[data-pagekey]') : null;
@@ -826,6 +840,186 @@ public fn runtime_js() -> string {
             }
           }
         }
+      } else if (kind === 'geo.get') {
+        (function(req) {
+          var gcb = String(req.cb || '');
+          if (!gcb) { return; }
+          var sendGeo = function(res) {
+            var r = (res && typeof res === 'object') ? res : { ok: false, error: 'geolocation unavailable' };
+            postUi({ sid: gcb, kind: 'geo', ok: !!r.ok, value: JSON.stringify(r), arg: JSON.stringify(r), data: r });
+          };
+          if (callIosNative('geo_get', {}, sendGeo)) { return; }
+          if (window.StudioAndroid && typeof window.StudioAndroid.getGeolocation === 'function') {
+            try { sendGeo(JSON.parse(String(window.StudioAndroid.getGeolocation() || '{}'))); } catch (eg) { sendGeo({ ok: false, error: String(eg) }); }
+            return;
+          }
+          if (typeof navigator !== 'undefined' && navigator.geolocation && typeof navigator.geolocation.getCurrentPosition === 'function') {
+            navigator.geolocation.getCurrentPosition(
+              function(pos) {
+                var c = pos && pos.coords ? pos.coords : {};
+                sendGeo({ ok: true, lat: c.latitude || 0, lon: c.longitude || 0, accuracy: c.accuracy || 0 });
+              },
+              function(err) { sendGeo({ ok: false, error: err && err.message ? err.message : 'geolocation denied' }); }
+            );
+          } else {
+            sendGeo({ ok: false, error: 'geolocation unavailable' });
+          }
+        })(ef);
+      } else if (kind === 'biometrics.auth') {
+        (function(req) {
+          var bcb = String(req.cb || '');
+          var reason = String(req.reason || 'Verify identity');
+          if (!bcb) { return; }
+          var sendBio = function(res) {
+            var r = (res && typeof res === 'object') ? res : { ok: false, error: 'biometrics unavailable' };
+            postUi({ sid: bcb, kind: 'biometrics', ok: !!r.ok, value: r.ok ? 'true' : 'false', arg: JSON.stringify(r), data: r });
+          };
+          if (callIosNative('biometrics_auth', { reason: reason }, sendBio)) { return; }
+          if (window.StudioAndroid && typeof window.StudioAndroid.authenticateBiometrics === 'function') {
+            try { sendBio(JSON.parse(String(window.StudioAndroid.authenticateBiometrics(reason) || '{}'))); } catch (eb) { sendBio({ ok: false, error: String(eb) }); }
+            return;
+          }
+          if (typeof window !== 'undefined' && window.PublicKeyCredential && typeof window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function') {
+            window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().then(function(avail) {
+              sendBio({ ok: !!avail, available: !!avail, provider: 'webauthn', error: avail ? '' : 'platform authenticator unavailable' });
+            }).catch(function(ew) { sendBio({ ok: false, error: String(ew) }); });
+          } else {
+            sendBio({ ok: false, error: 'biometrics unavailable' });
+          }
+        })(ef);
+      } else if (kind === 'camera.capture') {
+        (function(req) {
+          var ccb = String(req.cb || '');
+          var facing = String(req.facing || 'environment');
+          if (!ccb) { return; }
+          var sendCam = function(res) {
+            var r = (res && typeof res === 'object') ? res : { ok: false, error: 'camera unavailable' };
+            postUi({ sid: ccb, kind: 'camera', ok: !!r.ok, value: String(r.name || ''), arg: JSON.stringify(r), data: r });
+          };
+          if (callIosNative('camera_capture', { facing: facing }, sendCam)) { return; }
+          if (window.StudioAndroid && typeof window.StudioAndroid.captureCamera === 'function') {
+            try { sendCam(JSON.parse(String(window.StudioAndroid.captureCamera(facing) || '{}'))); } catch (ec) { sendCam({ ok: false, error: String(ec) }); }
+            return;
+          }
+          if (typeof document !== 'undefined' && document.createElement) {
+            try {
+              var inp = document.createElement('input');
+              inp.setAttribute('type', 'file');
+              inp.setAttribute('accept', 'image/*');
+              inp.setAttribute('capture', facing);
+              inp.style.display = 'none';
+              inp.onchange = function() {
+                var f = inp.files && inp.files[0];
+                if (!f) { sendCam({ ok: false, error: 'cancelled' }); return; }
+                sendCam({ ok: true, name: String(f.name || ''), size: Number(f.size || 0), type: String(f.type || '') });
+              };
+              if (document.body && document.body.appendChild) {
+                document.body.appendChild(inp);
+                if (typeof inp.click === 'function') { inp.click(); }
+                document.body.removeChild(inp);
+              }
+            } catch (ec2) { sendCam({ ok: false, error: String(ec2) }); }
+          } else {
+            sendCam({ ok: false, error: 'camera unavailable' });
+          }
+        })(ef);
+      } else if (kind === 'notifications.show') {
+        (function(req) {
+          var ncb = String(req.cb || '');
+          var title = String(req.title || '');
+          var body = String(req.body || '');
+          var sendNotif = function(res) {
+            if (!ncb) { return; }
+            var r = (res && typeof res === 'object') ? res : { ok: false, error: 'notifications unavailable' };
+            postUi({ sid: ncb, kind: 'notifications', ok: !!r.ok, value: title, arg: JSON.stringify(r), data: r });
+          };
+          if (callIosNative('notifications_show', { title: title, body: body }, sendNotif)) { return; }
+          if (window.StudioAndroid && typeof window.StudioAndroid.showNotification === 'function') {
+            try { sendNotif(JSON.parse(String(window.StudioAndroid.showNotification(title, body) || '{}'))); } catch (en) { sendNotif({ ok: false, error: String(en) }); }
+            return;
+          }
+          if (typeof window !== 'undefined' && typeof window.Notification === 'function') {
+            var spawnN = function() {
+              try {
+                new window.Notification(title, { body: body });
+                sendNotif({ ok: true, title: title });
+              } catch (en2) { sendNotif({ ok: false, error: String(en2) }); }
+            };
+            if (window.Notification.permission === 'granted') {
+              spawnN();
+            } else if (typeof window.Notification.requestPermission === 'function') {
+              window.Notification.requestPermission().then(function(perm) {
+                if (perm === 'granted') { spawnN(); }
+                else { sendNotif({ ok: false, error: 'notification permission ' + String(perm) }); }
+              }).catch(function(en3) { sendNotif({ ok: false, error: String(en3) }); });
+            } else {
+              sendNotif({ ok: false, error: 'notifications permission denied' });
+            }
+          } else {
+            sendNotif({ ok: false, error: 'notifications unavailable' });
+          }
+        })(ef);
+      } else if (kind === 'contacts.pick') {
+        (function(req) {
+          var kcb = String(req.cb || '');
+          if (!kcb) { return; }
+          var sendContact = function(res) {
+            var r = (res && typeof res === 'object') ? res : { ok: false, error: 'contacts unavailable' };
+            postUi({ sid: kcb, kind: 'contacts', ok: !!r.ok, value: JSON.stringify(r), arg: JSON.stringify(r), data: r });
+          };
+          if (callIosNative('contacts_pick', {}, sendContact)) { return; }
+          if (window.StudioAndroid && typeof window.StudioAndroid.pickContact === 'function') {
+            try { sendContact(JSON.parse(String(window.StudioAndroid.pickContact() || '{}'))); } catch (ek) { sendContact({ ok: false, error: String(ek) }); }
+            return;
+          }
+          if (typeof navigator !== 'undefined' && navigator.contacts && typeof navigator.contacts.select === 'function') {
+            navigator.contacts.select(['name', 'email', 'tel'], { multiple: false }).then(function(list) {
+              sendContact({ ok: true, contacts: Array.isArray(list) ? list : [] });
+            }).catch(function(ek2) { sendContact({ ok: false, error: String(ek2) }); });
+          } else {
+            sendContact({ ok: false, error: 'contacts picker unavailable' });
+          }
+        })(ef);
+      } else if (kind === 'ble.scan') {
+        (function(req) {
+          var bcb = String(req.cb || '');
+          var suuid = String(req.service_uuid || '');
+          if (!bcb) { return; }
+          var sendBle = function(res) {
+            var r = (res && typeof res === 'object') ? res : { ok: false, error: 'bluetooth unavailable' };
+            postUi({ sid: bcb, kind: 'ble', ok: !!r.ok, value: JSON.stringify(r), arg: JSON.stringify(r), data: r });
+          };
+          if (callIosNative('ble_scan', { service_uuid: suuid }, sendBle)) { return; }
+          if (window.StudioAndroid && typeof window.StudioAndroid.bleScan === 'function') {
+            try { sendBle(JSON.parse(String(window.StudioAndroid.bleScan(suuid) || '{}'))); } catch (ebl) { sendBle({ ok: false, error: String(ebl) }); }
+            return;
+          }
+          if (typeof navigator !== 'undefined' && navigator.bluetooth && typeof navigator.bluetooth.requestDevice === 'function') {
+            var opts = suuid ? { filters: [{ services: [suuid] }] } : { acceptAllDevices: true };
+            navigator.bluetooth.requestDevice(opts).then(function(dev) {
+              sendBle({ ok: true, id: dev ? String(dev.id || '') : '', name: dev ? String(dev.name || '') : '' });
+            }).catch(function(ebl2) { sendBle({ ok: false, error: String(ebl2) }); });
+          } else {
+            sendBle({ ok: false, error: 'bluetooth unavailable' });
+          }
+        })(ef);
+      } else if (kind === 'background.schedule') {
+        (function(req) {
+          var bgcb = String(req.cb || '');
+          var tid = String(req.task_id || '');
+          var sec = Number(req.interval_sec || 60);
+          var sendBg = function(res) {
+            if (!bgcb) { return; }
+            var r = (res && typeof res === 'object') ? res : { ok: false, error: 'background scheduling unavailable' };
+            postUi({ sid: bgcb, kind: 'background', ok: !!r.ok, value: tid, arg: JSON.stringify(r), data: r });
+          };
+          if (callIosNative('background_schedule', { task_id: tid, interval_sec: sec }, sendBg)) { return; }
+          if (window.StudioAndroid && typeof window.StudioAndroid.scheduleBackgroundTask === 'function') {
+            try { sendBg(JSON.parse(String(window.StudioAndroid.scheduleBackgroundTask(tid, sec) || '{}'))); } catch (ebg) { sendBg({ ok: false, error: String(ebg) }); }
+            return;
+          }
+          sendBg({ ok: true, task_id: tid, interval_sec: sec, mode: 'foreground_timer' });
+        })(ef);
       } else if (kind === 'http') {
         (function(req) {
           var reqUrl = String(req.url || '');

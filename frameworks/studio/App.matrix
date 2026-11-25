@@ -532,6 +532,54 @@ public class App {
         self.render();
     }
 
+    /// Persist router/state/theme/i18n snapshot across desktop hot-reload restarts (A-23).
+    public fn save_hot_snapshot(self, path: string = ".studio-hot-state.json") -> bool {
+        let snap = {
+            "app": self.app_name,
+            "router": nav.snapshot(),
+            "state": state.snapshot(),
+            "theme": theme.snapshot(),
+            "i18n": i18n.snapshot(),
+        };
+        return write_file(path, json_write(snap)).is_ok();
+    }
+
+    /// Restore hot-reload snapshot if present and delete the transient file (A-23).
+    public fn restore_hot_snapshot(self, path: string = ".studio-hot-state.json") -> bool {
+        if not file_exists(path) {
+            return false;
+        }
+        let r = read_file(path);
+        let _rm = remove_file(path);
+        if r.is_err() {
+            return false;
+        }
+        try {
+            let m = json_parse(string(r.unwrap()));
+            if type_of(m) != "map" {
+                return false;
+            }
+            if m.has("app") and string(m["app"]) != "" and string(m["app"]) != self.app_name {
+                return false;
+            }
+            if m.has("router") and type_of(m["router"]) == "map" {
+                nav.restore(m["router"]);
+            }
+            if m.has("state") and type_of(m["state"]) == "map" {
+                state.restore(m["state"]);
+            }
+            if m.has("theme") and type_of(m["theme"]) == "map" {
+                theme.restore(m["theme"]);
+            }
+            if m.has("i18n") and type_of(m["i18n"]) == "map" {
+                i18n.restore(m["i18n"]);
+            }
+            return true;
+        } catch (_e) {
+            return false;
+        }
+    }
+
     /// Boot the app in the native webview and run until the window closes.
     public fn run(self) -> int {
         self.prepare();
@@ -546,6 +594,7 @@ public class App {
             let bf = self.boot_fn;
             bf();
         }
+        self.restore_hot_snapshot();
         self.render();
 
         br.on("ui", (a, b = null) => {
@@ -566,7 +615,10 @@ public class App {
                 } else {
                     self.sync_native_poll();
                 }
-                if file_exists(".studio-stop") or file_exists(".studio-reload") {
+                if file_exists(".studio-reload") {
+                    self.save_hot_snapshot();
+                    request_shutdown();
+                } elif file_exists(".studio-stop") {
                     request_shutdown();
                 }
                 return;

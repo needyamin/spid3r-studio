@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+OUT_DIR="${1:-.}"
+APP_BUNDLE="${OUT_DIR}/{{APP_NAME}}.app"
+DMG_PATH="${OUT_DIR}/{{SAFE_NAME}}-{{APP_VERSION}}.dmg"
+
+mkdir -p "${APP_BUNDLE}/Contents/MacOS" "${APP_BUNDLE}/Contents/Resources"
+cp "${OUT_DIR}/{{EXEC_NAME}}" "${APP_BUNDLE}/Contents/MacOS/{{EXEC_NAME}}"
+chmod +x "${APP_BUNDLE}/Contents/MacOS/{{EXEC_NAME}}"
+cp "$(dirname "$0")/Info.plist" "${APP_BUNDLE}/Contents/Info.plist"
+
+if [ -n "${APPLE_SIGN_IDENTITY:-}" ]; then
+  codesign --force --options runtime --timestamp --sign "${APPLE_SIGN_IDENTITY}" "${APP_BUNDLE}"
+fi
+
+hdiutil create -volname "{{APP_NAME}}" -srcfolder "${APP_BUNDLE}" -ov -format UDZO "${DMG_PATH}"
+
+if [ -n "${APPLE_NOTARY_PROFILE:-}" ]; then
+  xcrun notarytool submit "${DMG_PATH}" --keychain-profile "${APPLE_NOTARY_PROFILE}" --wait
+  xcrun stapler staple "${DMG_PATH}"
+fi
+echo "Created DMG: ${DMG_PATH}"

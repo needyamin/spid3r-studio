@@ -71,6 +71,9 @@ jobs:
           case "${{ matrix.target }}" in
             web)
               test -s workspace/demo/build/web/index.html
+              test -s workspace/demo/build/web/offline.html
+              test -s workspace/demo/build/web/icon-192.png
+              test -s workspace/demo/build/web/icon-512.png
               test -s workspace/demo/build/web/app.matrix
               test -s workspace/demo/build/web/manifest.json
               test -s workspace/demo/build/web/sw.js
@@ -79,12 +82,17 @@ jobs:
               test -s workspace/demo/build/android/AndroidApp/app/build.gradle.kts
               test -s workspace/demo/build/android/AndroidApp/app/src/main/assets/app.matrix
               test -s workspace/demo/build/android/AndroidApp/app/src/main/res/xml/network_security_config.xml
+              test -s workspace/demo/build/android/AndroidApp/app/src/test/java/com/example/studiodemo/MainActivityTest.kt
               test -s workspace/demo/build/android/AndroidApp/gradlew
               test -s workspace/demo/build/android/AndroidApp/gradle/wrapper/gradle-wrapper.properties
+              if command -v gradle >/dev/null 2>&1 && [ -n "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}" ]; then
+                (cd workspace/demo/build/android/AndroidApp && gradle assembleDebug testDebugUnitTest)
+              fi
               ;;
             ios)
               test -s workspace/demo/build/ios/StudioDemo/Package.swift
               test -s workspace/demo/build/ios/StudioDemo/Info.plist
+              test -s workspace/demo/build/ios/StudioDemo/LaunchScreen.storyboard
               test -s workspace/demo/build/ios/StudioDemo/Entitlements.plist
               test -s workspace/demo/build/ios/StudioDemo/xtool.yml
               test -s workspace/demo/build/ios/StudioDemo/sbom.json

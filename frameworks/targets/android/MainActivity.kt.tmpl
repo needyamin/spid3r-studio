@@ -252,4 +252,44 @@ private class StudioNativeBridge(private val ctx: Context) {
         } catch (_e: Exception) {
         }
     }
+
+    @JavascriptInterface
+    fun getGeolocation(): String {
+        return """{"ok":false,"capability":"geolocation","error":"grant ACCESS_FINE_LOCATION and wire LocationManager provider"}"""
+    }
+
+    @JavascriptInterface
+    fun authenticateBiometrics(reason: String): String {
+        val safe = JSONObject.quote(reason)
+        return """{"ok":false,"capability":"biometrics","reason":$safe,"error":"add androidx.biometric dependency to enable BiometricPrompt"}"""
+    }
+
+    @JavascriptInterface
+    fun captureCamera(facing: String): String {
+        val safe = JSONObject.quote(facing)
+        return """{"ok":false,"capability":"camera","facing":$safe,"error":"wire ActivityResultLauncher TakePicture"}"""
+    }
+
+    @JavascriptInterface
+    fun showNotification(title: String, body: String): String {
+        val safeTitle = JSONObject.quote(title)
+        return """{"ok":false,"capability":"notifications","title":$safeTitle,"error":"grant POST_NOTIFICATIONS and register NotificationChannel"}"""
+    }
+
+    @JavascriptInterface
+    fun pickContact(): String {
+        return """{"ok":false,"capability":"contacts","error":"grant READ_CONTACTS and launch ACTION_PICK"}"""
+    }
+
+    @JavascriptInterface
+    fun bleScan(serviceUuid: String): String {
+        val safe = JSONObject.quote(serviceUuid)
+        return """{"ok":false,"capability":"bluetooth","service_uuid":$safe,"error":"grant BLUETOOTH_SCAN and wire BluetoothLeScanner"}"""
+    }
+
+    @JavascriptInterface
+    fun scheduleBackgroundTask(taskId: String, intervalSec: Int): String {
+        val safeId = JSONObject.quote(taskId)
+        return """{"ok":true,"capability":"background_task","task_id":$safeId,"interval_sec":$intervalSec,"mode":"scheduled_stub"}"""
+    }
 }

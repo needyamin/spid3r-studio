@@ -127,7 +127,27 @@ fn main() -> int {
         check_ok(w.contains("worker-src 'self'"), "wasmhost permits local worker");
         check_ok(w.contains("object-src 'none'"), "wasmhost blocks object-src");
         check_ok(not w.contains("http:"), "A-31 wasmhost CSP drops cleartext http:");
+        check_ok(
+            w.contains(r#"'nonce-{{APP_CSP_NONCE}}'"#),
+            "A-12/A-31 wasmhost CSP enforces per-build script nonce"
+        );
+        check_ok(
+            not w.contains("script-src 'self' 'unsafe-inline'"),
+            "A-12/A-31 wasmhost script-src drops unsafe-inline"
+        );
+        check_ok(
+            w.contains("require-trusted-types-for 'script'") and w.contains("trusted-types appstudio"),
+            "A-31 wasmhost CSP enables Trusted Types policy"
+        );
+        check_ok(
+            w.contains(r#"{{SPID3R_JS_SRI}}"#),
+            "A-31 wasmhost includes SRI placeholder for spid3r.js"
+        );
     }
+    check_ok(
+        ex.verify_catalog_signature(),
+        "A-14 verify_catalog_signature passes on downloads/packages/catalog.json"
+    );
 
     // 6. A-11: Raw style prop sanitization
     let bad_style_html = render.node_html(ui.row([ui.text("x")], {

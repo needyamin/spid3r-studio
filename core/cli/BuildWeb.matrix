@@ -261,8 +261,19 @@ public fn fill_host_page(
     } else {
         ""
     };
+    let app_ver = man.app_version_of(appdir);
+    let nonce_seed = bundle_id + "|" + app_ver + "|" + string(client_js.len()) + "|" + string(now_ms());
+    let csp_nonce = ex.sha256_file(outdir + "/app.matrix");
+    if csp_nonce == "" {
+        csp_nonce = fs.sanitize_swift_ident(bundle_id) + "_" + string(nonce_seed.len()) + "_" + string(now_ms());
+    } else {
+        csp_nonce = csp_nonce.slice(0, 24);
+    }
+    let sri_attr = ex.sri_sha256_attr(outdir + "/spid3r.js");
     let out = tpl.replace("\{\{APP_CSP_CONNECT_SRC\}\}", fs.html_escape(csp_conn))
     .replace("\{\{APP_CSP_EXTRA\}\}", csp_extra)
+    .replace("\{\{APP_CSP_NONCE\}\}", csp_nonce)
+    .replace("\{\{SPID3R_JS_SRI\}\}", sri_attr)
     .replace("\{\{APP_TITLE\}\}", fs.html_escape(name))
     .replace("\{\{APP_ICON_TAG\}\}", icon_tag)
     .replace("\{\{APP_PWA_TAGS\}\}", pwa_tags)
@@ -281,6 +292,44 @@ public fn emit_line_map(outdir: string, lmap: list) -> bool {
         return true;
     }
     return fs.write_checked(outdir + "/app.matrix.map.json", json_write(lmap) + "\n");
+}
+
+fn write_pwa_png_icons(icon_src: string, outdir: string) -> bool {
+    let p192 = outdir + "/icon-192.png";
+    let p512 = outdir + "/icon-512.png";
+    if icon_src != "" and fs.file_ext(icon_src) == "png" {
+        if copy_file(icon_src, p192).is_ok() and copy_file(icon_src, p512).is_ok() {
+            return true;
+        }
+    }
+    let py_cmd = if fs.is_windows() {
+        "python"
+    } else {
+        "python3"
+    };
+    let script = "import struct,zlib,sys\ndef chunk(t,d):\n return struct.pack('!I',len(d))+t+d+struct.pack('!I',zlib.crc32(t+d)&0xffffffff)\ndef mk(sz):\n row=b'\\x00'+b'\\x4f\\x46\\xe5\\xff'*sz\n raw=zlib.compress(row*sz,1)\n return b'\\x89PNG\\r\\n\\x1a\\n'+chunk(b'IHDR',struct.pack('!IIBBBBB',sz,sz,8,6,0,0,0))+chunk(b'IDAT',raw)+chunk(b'IEND',b'')\nopen(sys.argv[1],'wb').write(mk(192))\nopen(sys.argv[2],'wb').write(mk(512))\n";
+    let r = exec_capture(py_cmd, ["-c", script, p192, p512], null);
+    if r.is_ok() and int(r.unwrap()["code"]) == 0 and file_exists(p192) and file_exists(p512) {
+        return true;
+    }
+    // Minimal 1x1 fallback PNG base64-decoded via PowerShell if Python is unavailable
+    let b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    if fs.is_windows() {
+        let ps = "$b=[Convert]::FromBase64String('" + b64 + "');[IO.File]::WriteAllBytes('" + p192.replace("'", "''") + "',$b);[IO.File]::WriteAllBytes('" + p512.replace("'", "''") + "',$b)";
+        let rp = exec_capture("powershell", ["-NoProfile", "-Command", ps], null);
+        return rp.is_ok() and int(rp.unwrap()["code"]) == 0;
+    }
+    let rl = exec_capture(
+        "sh",
+        ["-c",
+        "printf '%s' \"$1\" | base64 -d > \"$2\" && cp \"$2\" \"$3\"",
+        "_",
+        b64,
+        p192,
+        p512],
+        null
+    );
+    return rl.is_ok() and int(rl.unwrap()["code"]) == 0;
 }
 
 fn emit_pwa_files(appdir: string, outdir: string) -> int {
@@ -307,29 +356,31 @@ fn emit_pwa_files(appdir: string, outdir: string) -> int {
         "theme_color": theme_color,
     };
     let icon_src = man.app_icon_of(appdir);
-    if icon_src != "" {
-        let ext = fs.file_ext(icon_src);
-        if ext == "" {
-            ext = "png";
+    if write_pwa_png_icons(icon_src, outdir) {
+        manifest["icons"] = [{
+            "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"
         }
-        let icon_name = "icon." + ext;
-        if file_exists(outdir + "/" + icon_name) {
-            let mime = "image/png";
-            if ext == "svg" {
-                mime = "image/svg+xml";
-            } elif ext == "jpg" or ext == "jpeg" {
-                mime = "image/jpeg";
-            }
-            manifest["icons"] = [{
-                "src": icon_name, "sizes": "192x192", "type": mime, "purpose": "any maskable"
-            }
-            , {
-                "src": icon_name, "sizes": "512x512", "type": mime, "purpose": "any maskable"
-            }
-            ];
+        , {
+            "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"
         }
+        , {
+            "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"
+        }
+        , {
+            "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"
+        }
+        ];
     }
     if not fs.write_checked(outdir + "/manifest.json", json_write(manifest)) {
+        return 1;
+    }
+
+    let off_txt = fs.render_template("targets/offline.template.html", {
+        "APP_TITLE": fs.html_escape(name),
+        "THEME_COLOR": fs.html_escape(theme_color),
+        "BG_COLOR": fs.html_escape(bg_color),
+    });
+    if off_txt == "" or not fs.write_checked(outdir + "/offline.html", off_txt) {
         return 1;
     }
 

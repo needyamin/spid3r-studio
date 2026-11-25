@@ -1446,6 +1446,52 @@ public fn SubPage() -> map {
         "A-03 200-node render completes within 1000ms budget (" + string(elapsed_perf) + "ms)"
     );
 
+    // ---------- A-23: Desktop state-preserving hot-reload snapshot ----------
+    let hot_path = tmp_base + "/hot_state.json";
+    state.reset();
+    state.set("draft", "preserve-me");
+    nav.reset();
+    nav.configure(["Home", "Stats"]);
+    nav.push("Detail", {
+        "id": "42"
+    });
+    check_ok(
+        gui_app.save_hot_snapshot(hot_path),
+        "A-23 save_hot_snapshot writes JSON snapshot"
+    );
+    state.reset();
+    nav.reset();
+    nav.configure(["Home", "Stats"]);
+    check_ok(
+        gui_app.restore_hot_snapshot(hot_path),
+        "A-23 restore_hot_snapshot restores and removes file"
+    );
+    check_eq(state.get("draft"), "preserve-me", "A-23 hot snapshot preserves state");
+    check_eq(nav.page_name(), "Detail", "A-23 hot snapshot preserves route");
+    check_ok(not file_exists(hot_path), "A-23 hot snapshot file cleaned after restore");
+
+    // ---------- A-05: Extended native capability bridge effects ----------
+    br.drain_effects();
+    check_ok(br.request_geolocation("on_geo"), "A-05 request_geolocation enqueues effect");
+    check_ok(
+        br.authenticate_biometrics("Unlock", "on_bio"),
+        "A-05 authenticate_biometrics enqueues effect"
+    );
+    check_ok(br.capture_camera("on_cam", "user"), "A-05 capture_camera enqueues effect");
+    check_ok(br.notify("Hi", "Body", "on_notif"), "A-05 notify enqueues effect");
+    check_ok(br.pick_contact("on_contact"), "A-05 pick_contact enqueues effect");
+    check_ok(br.ble_scan("180d", "on_ble"), "A-05 ble_scan enqueues effect");
+    check_ok(
+        br.schedule_background_task("sync", 300, "on_bg"),
+        "A-05 schedule_background_task enqueues effect"
+    );
+    let cap_effects = br.drain_effects();
+    check_eq(
+        cap_effects.len(),
+        7,
+        "A-05 all 7 capability helpers emit structured host effects"
+    );
+
     state.reset();
     theme.reset();
     i18n.reset();

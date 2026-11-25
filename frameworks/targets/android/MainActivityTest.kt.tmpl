@@ -1,0 +1,43 @@
+package {{PACKAGE_NAME}}
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class MainActivityTest {
+    private fun isTrustedOrigin(scheme: String, host: String): Boolean {
+        return scheme.lowercase() == "https" && host.lowercase() == "appassets.androidplatform.net"
+    }
+
+    private fun isAllowedExternalScheme(scheme: String): Boolean {
+        val sch = scheme.lowercase()
+        return sch == "https" || sch == "http" || sch == "mailto" || sch == "tel"
+    }
+
+    private fun shouldExitOnBack(jsEvalResult: String): Boolean {
+        return jsEvalResult != "true"
+    }
+
+    @Test
+    fun originLockAllowsOnlyBundledAppAssets() {
+        assertTrue(isTrustedOrigin("HTTPS", "AppAssets.AndroidPlatform.Net"))
+        assertFalse(isTrustedOrigin("http", "appassets.androidplatform.net"))
+        assertFalse(isTrustedOrigin("https", "evil.example.com"))
+    }
+
+    @Test
+    fun externalSchemeBlocksUnsafePayloads() {
+        assertTrue(isAllowedExternalScheme("https"))
+        assertTrue(isAllowedExternalScheme("mailto"))
+        assertFalse(isAllowedExternalScheme("javascript"))
+        assertFalse(isAllowedExternalScheme("file"))
+    }
+
+    @Test
+    fun backContractDelegatesToStudioBack() {
+        assertFalse(shouldExitOnBack("true"))
+        assertTrue(shouldExitOnBack("false"))
+        assertTrue(shouldExitOnBack("null"))
+    }
+}

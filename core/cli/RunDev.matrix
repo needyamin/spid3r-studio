@@ -157,7 +157,7 @@ public fn cmd_dev(appdir: string) -> int {
                 let cur = fs.source_signature(clean_dir);
                 if cur != last {
                     write_file(reload_flag, "1");
-                    sleep_ms(200);
+                    sleep_ms(350);
                     kill_pid(app_pid);
                     return;
                 }
@@ -181,8 +181,11 @@ public fn cmd_dev(appdir: string) -> int {
         generations += 1;
         let now_sig = fs.source_signature(clean_dir);
         if now_sig != sig0 {
-            println("change detected — reloading app...");
+            println("change detected — reloading app (preserving state)...");
             continue;
+        }
+        if file_exists(".studio-hot-state.json") {
+            let _rm_hs = remove_file(".studio-hot-state.json");
         }
         println("dev session ended (" + string(generations) + " runs).");
         return 0;
