@@ -118,11 +118,11 @@ jobs:
               test -s workspace/demo/build/android/AndroidApp/app/build.gradle.kts
               test -s workspace/demo/build/android/AndroidApp/app/src/main/assets/app.matrix
               test -s workspace/demo/build/android/AndroidApp/app/src/main/res/xml/network_security_config.xml
-              test -s workspace/demo/build/android/AndroidApp/app/src/test/java/com/example/studiodemo/MainActivityTest.kt
+              test -s workspace/demo/build/android/AndroidApp/app/src/test/java/sh/appstudio/demo/MainActivityTest.kt
               test -s workspace/demo/build/android/AndroidApp/gradlew
               test -s workspace/demo/build/android/AndroidApp/gradle/wrapper/gradle-wrapper.properties
               if command -v gradle >/dev/null 2>&1 && [ -n "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}" ]; then
-                (cd workspace/demo/build/android/AndroidApp && gradle assembleDebug testDebugUnitTest)
+                (cd workspace/demo/build/android/AndroidApp && gradle --no-daemon assembleDebug testDebugUnitTest)
               fi
               ;;
             ios)
