@@ -369,7 +369,7 @@ public fn walk_sources(dir: string, out: list) {
             }
         } elif is_file(p) {
             let f = string(name);
-            if f.ends_with(".matrix") or f == "studio.json" or f.ends_with(".html") or f.ends_with(".toml") {
+            if f.ends_with(".matrix") or f.ends_with(".mt") or f == "studio.json" or f.ends_with(".html") or f.ends_with(".toml") {
                 out.push(p);
             }
         }

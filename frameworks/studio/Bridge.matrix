@@ -49,6 +49,8 @@ let shim_html = null;
 let shim_eval = null;
 let shim_on = null;
 let shim_emit = null;
+let window_api = {
+};
 
 /// Install entry-provided GUI shims:
 /// title(t), html(s), eval(js), on(name, cb), emit(name, payload).
@@ -58,6 +60,18 @@ public fn install(f_title, f_html, f_eval, f_on, f_emit) {
     shim_eval = f_eval;
     shim_on = f_on;
     shim_emit = f_emit;
+}
+
+/// Install optional Spid3r v1.5.0 native window control shims from the entry file.
+/// Supported keys: "size", "min_size", "theme", "bg_color", "icon",
+/// "devtools", "maximize", "fullscreen", "resizable", "decorations", "close", "cancel_close".
+public fn install_window_api(api: map) {
+    if api == null or type_of(api) != "map" {
+        return;
+    }
+    for (k, v) in api {
+        window_api[string(k)] = v;
+    }
 }
 
 // ---------- webview natives (delegating wrappers) ----------
@@ -94,26 +108,132 @@ public fn emit(name: string, payload: string) {
     }
 }
 
+/// Set logical desktop window size (no-op on web/WASM or when window_api is uninstalled).
+public fn set_window_size(w: int, h: int) {
+    if window_api.has("size") and window_api["size"] != null {
+        let f = window_api["size"];
+        f(w, h);
+    }
+}
+
+/// Set minimum logical desktop window size.
+public fn set_window_min_size(w: int, h: int) {
+    if window_api.has("min_size") and window_api["min_size"] != null {
+        let f = window_api["min_size"];
+        f(w, h);
+    }
+}
+
+/// Set native titlebar theme ("light", "dark", or "system").
+public fn set_window_theme(mode: string) {
+    if window_api.has("theme") and window_api["theme"] != null {
+        let f = window_api["theme"];
+        f(mode);
+    }
+}
+
+/// Set webview startup/backdrop background color (#RGB, #RRGGBB, or #RRGGBBAA).
+public fn set_window_bg_color(hex: string) {
+    if window_api.has("bg_color") and window_api["bg_color"] != null {
+        let f = window_api["bg_color"];
+        f(hex);
+    }
+}
+
+/// Set desktop window and taskbar icon (.ico or .png path).
+public fn set_window_icon(path: string) {
+    if window_api.has("icon") and window_api["icon"] != null {
+        let f = window_api["icon"];
+        f(path);
+    }
+}
+
+/// Toggle or open WebView DevTools on desktop.
+public fn set_devtools(enabled: bool) {
+    if window_api.has("devtools") and window_api["devtools"] != null {
+        let f = window_api["devtools"];
+        f(enabled);
+    }
+}
+
+/// Maximize or unmaximize the desktop window.
+public fn set_window_maximized(flag: bool = true) {
+    if window_api.has("maximize") and window_api["maximize"] != null {
+        let f = window_api["maximize"];
+        f(flag);
+    }
+}
+
+/// Enter or exit borderless fullscreen mode.
+public fn set_window_fullscreen(flag: bool) {
+    if window_api.has("fullscreen") and window_api["fullscreen"] != null {
+        let f = window_api["fullscreen"];
+        f(flag);
+    }
+}
+
+/// Enable or disable user window resizing.
+public fn set_window_resizable(flag: bool) {
+    if window_api.has("resizable") and window_api["resizable"] != null {
+        let f = window_api["resizable"];
+        f(flag);
+    }
+}
+
+/// Show or hide native window decorations/titlebar.
+public fn set_window_decorations(flag: bool) {
+    if window_api.has("decorations") and window_api["decorations"] != null {
+        let f = window_api["decorations"];
+        f(flag);
+    }
+}
+
+/// Programmatically close the desktop window.
+public fn close_window() {
+    if window_api.has("close") and window_api["close"] != null {
+        let f = window_api["close"];
+        f();
+    }
+}
+
+/// Cancel a pending close inside a before_close/close handler.
+public fn cancel_close() {
+    if window_api.has("cancel_close") and window_api["cancel_close"] != null {
+        let f = window_api["cancel_close"];
+        f();
+    }
+}
+
 // ---------- handler registry ----------
 
 fn fresh_nonce() -> string {
     nonce_gen_seq += 1;
-    let ut = 0;
-    let nm = 0;
-    // Guard unix_time() behind native platform: std::time::SystemTime::now() panics in WASM (BUG-12).
-    if platform() == "native" {
-        try {
-            ut = unix_time();
-        } catch (_e) {
-            ut = 0;
+    try {
+        let rb = random_bytes(8);
+        if rb.is_ok() {
+            return string(rb.unwrap().to_hex());
         }
+    } catch (_e0) {
+        let _skip0 = _e0;
+    }
+    let um = 0;
+    let nm = 0;
+    try {
+        um = unix_ms();
+    } catch (_e1) {
+        um = 0;
     }
     try {
         nm = now_ms();
     } catch (_e2) {
         nm = 0;
     }
-    return U.fnv_hex(string(ut) + ":" + string(nm) + ":" + string(nonce_gen_seq));
+    let seed = string(um) + ":" + string(nm) + ":" + string(nonce_gen_seq);
+    try {
+        return string(sha256(seed)).slice(0, 16);
+    } catch (_e3) {
+        return U.fnv_hex(seed);
+    }
 }
 
 fn ensure_nonce() -> string {

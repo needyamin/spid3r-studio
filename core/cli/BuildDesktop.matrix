@@ -35,7 +35,15 @@ public fn build(
     }
 
     let launcher = outdir + "/_launcher.matrix";
-    if not fs.write_checked(launcher, "fn main() -> int {\n    return run_payload();\n}\n") {
+    let launch_call = if release {
+        "run_payload_strict()"
+    } else {
+        "run_payload()"
+    };
+    if not fs.write_checked(
+        launcher,
+        "fn main() -> int {\n    return " + launch_call + ";\n}\n"
+    ) {
         remove_file(bc);
         return 1;
     }

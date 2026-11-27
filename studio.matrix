@@ -143,7 +143,11 @@ fn main() -> int {
             println("error: run requires an app directory");
             return 2;
         }
-        return c_run.cmd_run(string(rest[0]));
+        return c_run.cmd_run(
+            string(rest[0]),
+            args_cli.arg_value(rest, "--engine"),
+            args_cli.has_flag(rest, "--devtools")
+        );
     }
     if cmd == "dev" {
         if rest.len() == 0 {
@@ -167,7 +171,11 @@ fn main() -> int {
         if dev_target == "ios" {
             return c_ios.cmd_ios_run(appdir, () => cmd_build(appdir, "ios", ""));
         }
-        return c_run.cmd_dev(appdir);
+        return c_run.cmd_dev(
+            appdir,
+            args_cli.arg_value(rest, "--engine"),
+            args_cli.has_flag(rest, "--devtools")
+        );
     }
     if cmd == "ios" {
         return c_ios.cmd_ios(rest, (ad) => cmd_build(ad, "ios", ""));

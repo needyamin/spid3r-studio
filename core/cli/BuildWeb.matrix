@@ -109,56 +109,8 @@ public fn scan_secrets(flat: string) -> list {
     return findings;
 }
 
-/// Scan a flattened bundle for top-level 'enum' declarations (A-51).
-/// Spid3r v1.1.1 parses and type-checks enums but discards them at runtime.
-public fn scan_unsupported_enums(flat: string) -> list {
-    let found = [];
-    let in_raw = false;
-    for raw_row in string(flat).split("\n") {
-        let t = string(raw_row).replace("\r", "").trim();
-        if in_raw {
-            if t.contains("\"#") {
-                in_raw = false;
-            }
-            continue;
-        }
-        if t.contains("r#\"") and not t.contains("\"#") {
-            in_raw = true;
-            continue;
-        }
-        if t.starts_with("//") or t.starts_with("/*") or t.starts_with("*") {
-            continue;
-        }
-        let rest = "";
-        if t.starts_with("public enum ") {
-            rest = t.slice(12, t.len()).trim();
-        } elif t.starts_with("private enum ") {
-            rest = t.slice(13, t.len()).trim();
-        } elif t.starts_with("enum ") {
-            rest = t.slice(5, t.len()).trim();
-        }
-        if rest != "" {
-            let ename = "";
-            let k = 0;
-            while k < rest.len() {
-                let c = rest[k];
-                let ok = (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "_";
-                if not ok {
-                    break;
-                }
-                ename += c;
-                k += 1;
-            }
-            if ename != "" and (rest.contains("{") or rest.len() == ename.len()) {
-                found.push(ename);
-            }
-        }
-    }
-    return found;
-}
-
-/// Static bundle gate (A-38, A-49 & A-51): scans for hardcoded secrets, rejects
-/// Spid3r v1.1.1-discarded enums, and runs `spid3r check --deny-warnings` on the exact bundle.
+/// Static bundle gate (A-38 & A-49): scans for hardcoded secrets and runs
+/// `spid3r check --deny-warnings` on the exact flattened bundle.
 public fn verify_flat_bundle(flat: string, workdir: string) -> int {
     let secrets = scan_secrets(flat);
     if secrets.len() > 0 {
@@ -169,18 +121,6 @@ public fn verify_flat_bundle(flat: string, workdir: string) -> int {
         }
         println(
             "hint: flat bundles are readable by clients; move credentials to a server/proxy."
-        );
-        return 1;
-    }
-    let enums = scan_unsupported_enums(flat);
-    if enums.len() > 0 {
-        for en in enums {
-            println(
-                "error[lint]: A-51 unsupported 'enum " + string(en) + "' declaration (Spid3r v1.1.1 discards enums at runtime)"
-            );
-        }
-        println(
-            "hint: replace 'enum' declarations with string/int constants or classes."
         );
         return 1;
     }

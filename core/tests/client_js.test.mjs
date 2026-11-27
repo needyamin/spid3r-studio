@@ -1375,8 +1375,10 @@ test('wasmworker.js A-03: uses persistent evalSession when available and falls b
   );
 });
 
-test('spid3r.wasm A-03 & BUG-12: persistent evalSession runs demo bundle without unix_time trap', () => {
-  const rtDir = path.join(ROOT, 'downloads/wasm-runtime/1.1.1');
+test('spid3r.wasm A-03 & v1.5.0: persistent evalSession runs demo bundle + enum/match + stdlib', () => {
+  const rt150 = path.join(ROOT, 'downloads/wasm-runtime/1.5.0');
+  const rt111 = path.join(ROOT, 'downloads/wasm-runtime/1.1.1');
+  const rtDir = fs.existsSync(path.join(rt150, 'spid3r.wasm')) ? rt150 : rt111;
   const jsPath = path.join(rtDir, 'spid3r.js');
   const wasmPath = path.join(rtDir, 'spid3r.wasm');
   if (!fs.existsSync(jsPath) || !fs.existsSync(wasmPath)) {
@@ -1386,6 +1388,28 @@ test('spid3r.wasm A-03 & BUG-12: persistent evalSession runs demo bundle without
   const Spid3r = req(jsPath);
   const sp = Spid3r.initSync(fs.readFileSync(wasmPath));
   assert.equal(typeof sp.evalSession, 'function', 'cached spid3r.js exposes evalSession');
+
+  if (rtDir === rt150) {
+    const vInfo = sp.version();
+    assert.equal(vInfo.version, '1.5.0', 'cached WASM runtime reports Spid3r 1.5.0');
+    sp.resetSession();
+    const initV15 = sp.evalSession(
+      'import "semver" as sv;\n' +
+      'enum Mode { Light, Custom(name) }\n' +
+      'fn label(m) -> string {\n' +
+      '    return match (m) { Mode.Light => "light", Mode.Custom(n) => "custom:" + n };\n' +
+      '}\n' +
+      'fn run_v15() -> string {\n' +
+      '    return label(Mode.Custom("neon")) + "|" + string(sv.compare("1.5.0", "1.1.1")) + "|" + string(unix_time() >= 0);\n' +
+      '}\n',
+      'vm'
+    );
+    assert.equal(initV15.ok, true, 'v1.5.0 session init with enum/match/stdlib succeeds: ' + (initV15.error || ''));
+    const callV15 = sp.evalSession('println(run_v15());', 'vm');
+    assert.equal(callV15.ok, true, 'v1.5.0 session dispatch succeeds: ' + (callV15.error || ''));
+    assert.ok(String(callV15.stdout || '').includes('custom:neon|1|true'), 'WASM v1.5.0 evaluates enum/match, stdlib semver, and unix_time()');
+    sp.resetSession();
+  }
 
   const tmpOut = fs.mkdtempSync(path.join(os.tmpdir(), 'appstudio_wasm_sess_'));
   try {

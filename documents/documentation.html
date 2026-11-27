@@ -385,7 +385,7 @@
     <div class="brand">
       <div>
         <div class="brand-title">Spid3r Studio</div>
-        <span class="brand-badge">v1.2.0 • Spid3r 1.1.1</span>
+        <span class="brand-badge">v1.5.0 • Spid3r 1.5.0</span>
       </div>
       <button type="button" class="theme-btn" id="theme-toggle">Theme</button>
     </div>
@@ -411,9 +411,9 @@
   <main class="content">
     <header class="hero">
       <h1>Spid3r Studio — Complete Developer Handbook</h1>
-      <p>Comprehensive architectural guide, coding standards, Spid3r v1.1.1 language compatibility rules, MVC Control Panel manual, and 6-platform compilation reference for building production applications in <code>.matrix</code>.</p>
+      <p>Comprehensive architectural guide, coding standards, Spid3r v1.5.0 language patterns, MVC Control Panel manual, and 6-platform compilation reference for building production applications in <code>.matrix</code> and <code>.mt</code>.</p>
       <div class="pill-row">
-        <span class="pill pill-version">Spid3r v1.1.1</span>
+        <span class="pill pill-version">Spid3r v1.5.0</span>
         <span class="pill">iOS (.ipa via xtool)</span>
         <span class="pill">Android (Kotlin / APK)</span>
         <span class="pill">Windows / macOS / Linux Native</span>
@@ -428,19 +428,18 @@
     <section class="card" id="prerequisites">
       <h2>0. Get Started — Install Spid3r</h2>
       <div class="callout">
-        <strong>Required before you begin:</strong> Spid3r Studio is authored in Spid3r v1.1.1 and requires the Spid3r v1.1.1 language/runtime plus the <code>spid3r</code> CLI. Without them installed and on your PATH, none of the <code>spid3r run studio.matrix ...</code> commands in this handbook will work.
+        <strong>Required before you begin:</strong> Spid3r Studio v1.5.0 targets Spid3r v1.5.0 and requires the <code>spid3r</code> CLI on your PATH before running any <code>spid3r run studio.matrix ...</code> command.
       </div>
       <div class="grid-3">
         <div class="mini-card">
           <h4>1. Install on Windows</h4>
-          <p>Run the recommended one-click installer: <a href="https://github.com/needyamin/spid3r/releases/download/v1.1.1/Spid3r-Setup-1.1.1.exe">Spid3r-Setup-1.1.1.exe</a>.</p>
-          <p>The <a href="https://github.com/needyamin/spid3r/releases/tag/v1.1.1">v1.1.1 release</a> is marked Latest and includes prebuilt <code>spid3r</code> binaries and checksums.</p>
+          <p>Install directly from the <a href="https://apps.microsoft.com/detail/9NPH5XX0F6KF">Microsoft Store</a> (<code>9NPH5XX0F6KF</code>) or download <code>Spid3r-Setup-&lt;version&gt;.exe</code> from <a href="https://github.com/needyamin/spid3r/releases">Spid3r Releases</a>.</p>
         </div>
         <div class="mini-card">
           <h4>2. Linux / macOS</h4>
           <p>Install with the official script:</p>
 <pre><code>curl -fsSL https://raw.githubusercontent.com/needyamin/spid3r/main/install.sh | sh</code></pre>
-          <p>Verify the download against <a href="https://github.com/needyamin/spid3r/releases/download/v1.1.1/sha256sums.txt">sha256sums.txt</a>, also linked from the release page. If <code>spid3r</code> is not recognized afterward, reopen your terminal once to refresh PATH.</p>
+          <p>Verify release checksums on the <a href="https://github.com/needyamin/spid3r/releases">releases page</a>. If <code>spid3r</code> is not recognized afterward, reopen your terminal once to refresh PATH.</p>
         </div>
         <div class="mini-card">
           <h4>3. Verify your setup</h4>
@@ -450,8 +449,8 @@
         </div>
       </div>
       <p>
-        <a class="btn btn-primary" href="https://github.com/needyamin/spid3r/releases/download/v1.1.1/Spid3r-Setup-1.1.1.exe">Download Spid3r-Setup-1.1.1.exe</a>
-        <a class="btn btn-secondary" href="https://github.com/needyamin/spid3r/releases/tag/v1.1.1">View all downloads &amp; checksums</a>
+        <a class="btn btn-primary" href="https://apps.microsoft.com/detail/9NPH5XX0F6KF">Install from Microsoft Store</a>
+        <a class="btn btn-secondary" href="https://github.com/needyamin/spid3r/releases">View all downloads &amp; checksums</a>
       </p>
       <p>New to <code>.matrix</code>? Read the <a href="tutorials/matrix-language-tutorial.md">matrix-language-tutorial.md</a> language tutorial.</p>
     </section>
@@ -479,7 +478,7 @@
           </tr>
           <tr>
             <td><strong>2. <code>downloads/</code></strong></td>
-            <td><code>installers/Xcode_27.2.xip</code><br><code>xtool/1.24.0/*</code><br><code>wasm-runtime/1.1.1/*</code><br><code>packages/catalog.json</code></td>
+            <td><code>installers/Xcode_27.2.xip</code><br><code>xtool/1.24.0/*</code><br><code>wasm-runtime/1.5.0/*</code><br><code>packages/catalog.json</code></td>
             <td>Dedicated storage for large toolchains, SDK installers, extracted <code>xtool</code> AppImage/SquashFS, and cached <code>spid3r.wasm</code> + <code>spid3r.js</code> runtime binaries. Ignored by Git except <code>packages/catalog.json</code>.</td>
           </tr>
           <tr>
@@ -606,7 +605,7 @@ fn main() -> int {
 }</code></pre>
           <div class="callout">
             <strong>Why is <code>main.matrix</code> separate?</strong><br>
-            In Spid3r v1.1.1 (<code>BUG-05</code>), the 5 native WebView functions (<code>gui_title</code>, <code>gui_set_html</code>, <code>gui_eval</code>, <code>gui_on</code>, <code>gui_emit</code>) link <strong>only</strong> in the top-level entry file. Passing them via <code>.bridge(...)</code> lets your entire app and framework compile cleanly for both Native Desktop and Web/Mobile WASM.
+            Native WebView and window natives (<code>gui_title</code>, <code>gui_set_html</code>, <code>gui_eval</code>, <code>gui_on</code>, <code>gui_emit</code>, <code>gui_size</code>, etc.) exist only in the desktop <code>spid3r gui</code> runtime (not in browser/mobile WASM). Passing them via <code>.bridge(...)</code> and <code>.window_bridge(...)</code> keeps <code>app.matrix</code> 100% portable across Desktop, Web, Android, and iOS.
           </div>
         </div>
       </div>
@@ -614,46 +613,36 @@ fn main() -> int {
       <h3>Core Engineering Best Practices</h3>
       <ol>
         <li><strong>Always scope <code>.data_dir(...)</code> inside your project folder:</strong> Set <code>.data_dir("workspace/&lt;AppName&gt;/storage")</code> so persistent <code>kv.json</code> files never pollute the repository root.</li>
-        <li><strong>Split multi-screen apps into <code>pages/*.matrix</code>:</strong> Export each page function as <code>public fn Detail() -&gt; map</code> and import it in <code>app.matrix</code> (`import "pages/Detail" as p_detail;`). `FlatKit.matrix` automatically resolves the dependency DAG and isolates module globals (`mod_u_pages_Detail_<var>`).</li>
-        <li><strong>Use named string handlers for async HTTP callbacks:</strong> Because Web/Android/iOS WASM runs as a stateless REPL per event, pass registered handler names (e.g. <code>http.get_async(url, "on_api_done")</code> + <code>.handler("on_api_done", on_api_done)</code>) rather than ephemeral closures for async callbacks.</li>
+        <li><strong>Split multi-screen apps into <code>pages/*.matrix</code>:</strong> Export each page function as <code>public fn Detail() -&gt; map</code> and import it in <code>app.matrix</code> (`import "pages/Detail" as p_detail;` or named `import { Detail } from "pages/Detail";`). `FlatKit.matrix` automatically resolves the dependency DAG and isolates module globals (`mod_u_pages_Detail_<var>`).</li>
+        <li><strong>Use named string handlers for async HTTP callbacks:</strong> Because Web/Android/iOS WASM runs across worker turns, pass registered handler names (e.g. <code>http.get_async(url, "on_api_done")</code> + <code>.handler("on_api_done", on_api_done)</code>) rather than ephemeral closures for async callbacks.</li>
         <li><strong>Provide stable <code>"key"</code> props on dynamic lists:</strong> Pass <code>{"key": "item-" + string(id)}</code> on list rows so <code>window.__studio.patch</code> morphs DOM nodes in place without losing input focus or scroll position.</li>
       </ol>
     </section>
 
     <!-- 4. SPID3R & .MATRIX COMPATIBILITY RULES -->
     <section class="card" id="spid3r-rules">
-      <h2>4. Verified Spid3r v1.1.1 &amp; <code>.matrix</code> Compatibility Rules</h2>
-      <p>Spid3r is a newly developed language with strict parser, formatter, and VM behaviors. Follow these <strong>10 mandatory rules</strong> (corresponding to verified issues <code>BUG-01</code>..<code>BUG-10</code> in <code>bugs.html</code>) whenever writing <code>.matrix</code> files:</p>
+      <h2>4. Spid3r v1.5.0 &amp; <code>.matrix</code> Authoring Best Practices</h2>
+      <p>Spid3r v1.5.0 introduces first-class <code>enum</code> + exhaustive <code>match</code>, named imports, 26 embedded stdlib modules in WASM, and strict visibility defaults. Follow these verified practices across all <code>.matrix</code> and <code>.mt</code> files:</p>
 
       <div class="table-scroll">
       <table>
         <thead>
           <tr>
-            <th>Rule / Bug ID</th>
-            <th>Don't Write (Fails in Spid3r v1.1.1)</th>
-            <th>Do Write (Verified Pattern)</th>
+            <th>Topic</th>
+            <th>Avoid</th>
+            <th>Recommended Spid3r v1.5.0 Pattern</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td><strong>No <code>elif</code> in Expression-Form <code>if</code></strong><br>(<code>BUG-06</code>)</td>
-            <td><code>let s = if a { "1" } elif b { "2" } else { "3" };</code><br><em>Parser fails &amp; loops 24+ times on <code>'}'</code>.</em></td>
-            <td>Declare <code>let s = "3";</code> first, then use statement-form <code>if a { s = "1"; } elif b { s = "2"; }</code>.</td>
+            <td><strong>Class &amp; Module Visibility</strong></td>
+            <td>Omitting <code>public</code> on class methods or exported functions.<br><em>Class members default to <code>private</code> in Spid3r v1.5.0.</em></td>
+            <td>Mark exported module symbols and public class methods/fields explicitly with <code>public</code>.</td>
           </tr>
           <tr>
-            <td><strong>No <code>if/else</code> Inside Map Literals</strong><br>(<code>BUG-10</code>)</td>
-            <td><code>let m = { "st": if ok { "yes" } else { "no" } };</code><br><em>Compiles, then crashes at runtime with <code>null is not callable</code>.</em></td>
-            <td>Bind <code>let st = if ok { "yes" } else { "no" };</code> to a local variable first, then write <code>{ "st": st }</code>.</td>
-          </tr>
-          <tr>
-            <td><strong>No Map Literal Inside Expression <code>if</code></strong><br>(<code>BUG-07</code>)</td>
-            <td><code>let m = if ok { { "a": 1 } } else { { "a": 2 } };</code><br><em>Inner <code>{</code> is misparsed as a code block.</em></td>
-            <td>Assign the map inside a statement-form <code>if / else</code> block.</td>
-          </tr>
-          <tr>
-            <td><strong>No Duplicate <code>let _ =</code> in One Scope</strong><br>(<code>BUG-09</code>)</td>
-            <td><code>let _ = fn1(); let _ = fn2();</code><br><em>Fails with <code>'_' is already declared in this scope</code>.</em></td>
-            <td>Call <code>fn1(); fn2();</code> directly as expression statements, or use distinct names (<code>_a</code>, <code>_b</code>).</td>
+            <td><strong>Enums &amp; Exhaustive <code>match</code></strong></td>
+            <td>Hand-rolled tag maps or non-exhaustive <code>match</code> arms.</td>
+            <td>Use <code>public enum Status { Idle, Ready(msg) }</code> with exhaustive <code>match (s) { ... }</code> across native and WASM.</td>
           </tr>
           <tr>
             <td><strong>Raw Strings for JS / CSS / JSON</strong></td>
@@ -661,18 +650,18 @@ fn main() -> int {
             <td>Always use raw strings <code>r#"function(){ return {a: 1}; }"#</code> for JS, CSS, or JSON literals.</td>
           </tr>
           <tr>
-            <td><strong>No <code>../</code> in <code>import</code> Paths</strong><br>(<code>BUG-08</code>, <code>BUG-09</code>)</td>
-            <td><code>import "../studio/App" as appkit;</code><br><em>Rejected by semantic analyzer.</em></td>
-            <td>Use root-relative imports (<code>import "studio/App" as appkit;</code>). <code>Fs.setup_import_path()</code> configures <code>SPID3R_PATH</code> automatically.</td>
+            <td><strong>Root-Relative Imports</strong></td>
+            <td><code>import "../studio/App" as appkit;</code><br><em>Parent-relative <code>../</code> imports are disallowed.</em></td>
+            <td>Use root-relative imports (<code>import "studio/App" as appkit;</code> or <code>import { App } from "studio/App";</code>).</td>
           </tr>
           <tr>
-            <td><strong>UTF-8 Without BOM &amp; 2-Pass <code>fmt</code></strong><br>(<code>BUG-08</code>)</td>
-            <td>Saving files with PowerShell default UTF-8 BOM.<br><em>Causes <code>spid3r fmt --check</code> to fail.</em></td>
-            <td>Save as UTF-8 without BOM (or click <strong>Save</strong> / <strong>Auto-Recover</strong> in the Control Panel) and run <code>spid3r fmt</code> twice.</td>
+            <td><strong>UTF-8 Without BOM &amp; <code>fmt</code></strong></td>
+            <td>Saving files with a UTF-8 BOM.<br><em>Causes <code>spid3r fmt --check</code> to fail.</em></td>
+            <td>Save as UTF-8 without BOM (or click <strong>Save</strong> / <strong>Auto-Recover</strong> in the Control Panel) and run <code>spid3r fmt</code>.</td>
           </tr>
           <tr>
-            <td><strong>Background Thread UI Updates</strong><br>(<code>BUG-03</code>, <code>BUG-04</code>)</td>
-            <td>Calling <code>gui_eval(...)</code> directly inside <code>spawn fn()</code>.<br><em>Silently dropped by WebView2 thread.</em></td>
+            <td><strong>Background Thread UI Updates</strong></td>
+            <td>Calling <code>gui_eval(...)</code> directly inside <code>spawn fn()</code>.<br><em>Never touch WebView APIs directly from worker threads.</em></td>
             <td>Mutate <code>State</code> inside <code>spawn fn()</code> and call <code>appkit.request_render()</code> (or use <code>jobs.run_async(...)</code>).</td>
           </tr>
         </tbody>
@@ -871,8 +860,8 @@ fn main() -> int {
     <section class="card" id="diagnostics-recovery">
       <h2>9. Compiler Diagnostics, Automated QA &amp; 1-Click Failure Recovery</h2>
       <ul>
-        <li><strong>Structured Error &amp; Suggestion Engine (<code>core/Diagnostics.matrix</code>):</strong> Parses <code>error[parser]</code>, <code>error[semantic]</code>, <code>error[runtime]</code>, and formatter warnings, deduplicates parser error loops (<code>BUG-06</code>), and maps known Spid3r v1.1.1 pitfalls (<code>BUG-01</code>..<code>BUG-10</code>) to exact fix instructions in the Control Panel.</li>
-        <li><strong>Self-Healing Project Recovery (<code>core/Recovery.matrix</code>):</strong> Clicking <strong>Auto-Recover</strong> in the Control Panel strips UTF-8 BOMs across all project files, runs two-pass <code>spid3r fmt</code> convergence, synchronizes <code>vendor/studio/</code> and <code>targets/host.html</code> from <code>frameworks/</code>, clears stale lock flags, and exports diagnostic reports to <code>documents/logs/</code> and <code>documents/reports/</code>.</li>
+        <li><strong>Structured Error &amp; Suggestion Engine (<code>core/Diagnostics.matrix</code>):</strong> Parses <code>error[parser]</code>, <code>error[semantic]</code>, <code>error[runtime]</code>, and formatter warnings, and maps Spid3r v1.5.0 diagnostics (visibility, exhaustive <code>match</code>, checked arithmetic, module resolution) to exact fix instructions in the Control Panel.</li>
+        <li><strong>Self-Healing Project Recovery (<code>core/Recovery.matrix</code>):</strong> Clicking <strong>Auto-Recover</strong> in the Control Panel strips UTF-8 BOMs across all project files, runs <code>spid3r fmt</code> convergence, synchronizes <code>vendor/studio/</code> and <code>targets/host.html</code> from <code>frameworks/</code>, clears stale lock flags, and exports diagnostic reports to <code>documents/logs/</code> and <code>documents/reports/</code>.</li>
       </ul>
     </section>
 

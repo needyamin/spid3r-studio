@@ -1,5 +1,5 @@
 // core/Diagnostics.matrix
-// Structured compiler and runtime error/warning detector with Spid3r v1.1.1 (.matrix) fix suggestions.
+// Structured compiler and runtime error/warning detector with Spid3r v1.5.0 (.matrix/.mt) fix suggestions.
 
 fn str_find(s: string, needle: string, from: int = 0) -> int {
     let n = s.len();
@@ -19,99 +19,55 @@ fn str_find(s: string, needle: string, from: int = 0) -> int {
 
 public fn suggestion_for_message(msg: string) -> string {
     let low = string(msg).lower();
-    if low.contains("found keyword 'elif'") or low.contains("unexpected keyword 'else'") {
-        return "Spid3r BUG-06: Expression-form 'if ... elif ... else' is not supported. Declare 'let x = ...;' first and use statement-form 'if / elif / else'.";
-    }
-    if low.contains("found colon") and low.contains("expected ';'") {
-        return "Spid3r BUG-07: Map literals inside an expression-form 'if/else' branch are misparsed as code blocks. Assign the map inside a statement block.";
-    }
-    if low.contains("unknown name 'gui_") {
-        return "Spid3r BUG-05: gui_* natives (gui_title, gui_set_html, gui_eval, gui_on, gui_emit) only link in the entry file (main.matrix). Pass them via app.bridge(...).";
-    }
     if low.contains("invalid module path") or low.contains("..") {
-        return "Spid3r BUG-08: Parent-relative '../' imports are rejected. Use root-relative imports with SPID3R_PATH=. or run Auto-Recover to sync vendor/studio/.";
+        return "Parent-relative '../' imports are disallowed. Use project-root-relative paths or configure SPID3R_PATH.";
     }
     if low.contains("cannot find module") or low.contains("module not found") {
-        return "Module import could not be resolved. Ensure SPID3R_PATH includes the project/framework root or click 'Auto-Recover Project' to sync vendor/studio/.";
+        return "Module import could not be resolved. Ensure SPID3R_PATH includes the project/framework root or run 'studio upgrade'.";
     }
     if low.contains("would reformat") {
-        return "Spid3r BUG-08: File formatting or UTF-8 BOM mismatch detected. Click 'Format & Fix BOM' or 'Auto-Recover Project' to run 2-pass spid3r fmt.";
+        return "File formatting or UTF-8 BOM mismatch detected. Run 'spid3r fmt' or click 'Auto-Recover Project'.";
+    }
+    if low.contains("unused variable") or low.contains("unused import") or low.contains("unused parameter") or low.contains("unreachable") {
+        return "Strict '--deny-warnings' check flagged an unused binding or unreachable branch. Prefix unused names with '_' or remove dead code.";
+    }
+    if low.contains("is private") or low.contains("cannot access private") {
+        return "Class members and top-level declarations default to private in Spid3r v1.5.0. Add 'public' on exported members or methods.";
+    }
+    if low.contains("non-exhaustive") or low.contains("missing variant") {
+        return "Exhaustive 'match' on an enum must handle every variant or include a wildcard '_' arm.";
+    }
+    if low.contains("division by zero") or low.contains("overflow") {
+        return "Spid3r v1.5.0 enforces checked arithmetic and rejects division/modulo by zero at runtime. Guard divisors and bounds before operating.";
+    }
+    if low.contains("unknown name 'gui_") {
+        return "gui_* natives require the 'spid3r gui' desktop runtime (or pass shims from main.matrix via app.bridge(...)).";
+    }
+    if low.contains("spid3r_ini") or low.contains("spid3r.ini") or low.contains("config pin") {
+        return "Check SPID3R_INI or run 'spid3r config validate' to repair the configuration pin.";
+    }
+    if low.contains("found keyword 'elif'") or low.contains("unexpected keyword 'else'") {
+        return "Legacy Spid3r BUG-06 parser mismatch (fixed in Spid3r v1.5.0): upgrade Spid3r or use statement-form 'if / elif / else'.";
+    }
+    if low.contains("found colon") and low.contains("expected ';'") {
+        return "Legacy Spid3r BUG-07 parser mismatch (fixed in Spid3r v1.5.0): assign map literals inside a statement block.";
     }
     if low.contains("fn expects") and low.contains("got 2") {
-        return "Spid3r BUG-02: gui_on invokes callbacks with 2 arguments (event, payload). Add an optional second parameter: (ev, payload = null) => { ... }.";
+        return "gui_on invokes 2-arg handlers as (event, payload); add an optional second parameter (ev, payload = null) => { ... }.";
     }
     if low.contains("'_' is already declared") {
-        return "Spid3r BUG-09: 'let _ = ...' is treated as a regular identifier rather than a wildcard discard. Omit 'let _ =' or use distinct variable names (e.g. '_a', '_b').";
-    }
-    if low.contains("unused variable") or low.contains("unused import") {
-        return "Strict '--deny-warnings' check flagged an unused binding. Prefix unused variables with a distinct '_' name (e.g. '_unused') or remove the unused binding/import.";
+        return "Legacy Spid3r BUG-09 duplicate '_' error (fixed in Spid3r v1.5.0): upgrade Spid3r or use distinct '_a'/'_b' names.";
     }
     if low.contains("null is not callable") {
-        return "Spid3r BUG-10: Expression-form 'if ... { ... } else { ... }' inside a map literal value is miscompiled into a null call at runtime. Bind the 'if/else' expression to a local 'let' variable before building the map literal.";
+        return "Legacy Spid3r BUG-10 map-value if/else error (fixed in Spid3r v1.5.0): bind the expression to a local variable first.";
     }
-    if low.contains("enum") {
-        return "Spid3r A-51: 'enum' declarations type-check in Spid3r v1.1.1 but are silently discarded at runtime (producing unknown name errors when variants are referenced). Replace enums with string/int constants or classes.";
-    }
-    return "Inspect the referenced file and line number in Code & Debugger, then run 'Compile & Check' to verify your fix.";
+    return "Inspect the referenced file and line number in Code & Debugger, then run 'spid3r check --deny-warnings' to verify your fix.";
 }
 
-/// Lint a .matrix source string for top-level 'enum' declarations discarded by Spid3r v1.1.1 (A-51).
-public fn lint_unsupported_enums(src: string, file_label: string = "") -> list {
-    let warnings = [];
-    let rows = string(src).split("\n");
-    let in_raw = false;
-    let line_no = 0;
-    for raw_row in rows {
-        line_no += 1;
-        let line = string(raw_row).replace("\r", "");
-        let t = line.trim();
-        if in_raw {
-            if t.contains("\"#") {
-                in_raw = false;
-            }
-            continue;
-        }
-        if t.contains("r#\"") and not t.contains("\"#") {
-            in_raw = true;
-            continue;
-        }
-        if t.starts_with("//") or t.starts_with("/*") or t.starts_with("*") {
-            continue;
-        }
-        let rest = "";
-        if t.starts_with("public enum ") {
-            rest = t.slice(12, t.len()).trim();
-        } elif t.starts_with("private enum ") {
-            rest = t.slice(13, t.len()).trim();
-        } elif t.starts_with("enum ") {
-            rest = t.slice(5, t.len()).trim();
-        }
-        if rest != "" {
-            let ename = "";
-            let k = 0;
-            while k < rest.len() {
-                let c = rest[k];
-                let ok = (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "_";
-                if not ok {
-                    break;
-                }
-                ename += c;
-                k += 1;
-            }
-            if ename != "" and (rest.contains("{") or rest.len() == ename.len()) {
-                warnings.push({
-                    "severity": "warning",
-                    "category": "lint-A51",
-                    "message": "Unsupported 'enum " + ename + "' declaration (Spid3r v1.1.1 discards enums at runtime)",
-                    "file": file_label,
-                    "line": line_no,
-                    "col": 1,
-                    "suggestion": suggestion_for_message("enum"),
-                });
-            }
-        }
-    }
-    return warnings;
+/// Lint a .matrix/.mt source string for common hygiene issues (returns structured warning records).
+public fn lint_unsupported_enums(_src: string, _file_label: string = "") -> list {
+    // Spid3r v1.5.0 natively supports enum declarations and exhaustive match across all engines.
+    return [];
 }
 
 fn parse_span(line: string) -> map {

@@ -1,11 +1,11 @@
 {
-  "studioVersion": "1.2.0",
-  "spid3rTargetVersion": "1.1.1",
+  "studioVersion": "1.5.0",
+  "spid3rTargetVersion": "1.5.0",
   "architecture": {
     "frameworks": "frameworks/ (plus studio/, targets/, templates/)",
     "downloads": "downloads/ (xtool, wasm-runtime, installers, packages)",
     "documents": "documents/ (guides, tutorials, references, logs, reports)",
-    "workspace": "workspace/ (developer projects + examples/demo)",
+    "workspace": "workspace/ (developer projects + workspace/demo)",
     "core": "core/ (Engine, Diagnostics, Recovery, Plugins + cli/, tools/, gui/)"
   },
   "frameworks": [
@@ -13,15 +13,15 @@
       "id": "studio-ui",
       "name": "Spid3r Studio Declarative UI Framework",
       "path": "studio/",
-      "version": "1.2.0",
-      "modules": ["Util", "Theme", "State", "Storage", "Router", "Bridge", "Components", "CSS", "Render", "ClientJS", "Http", "App"],
+      "version": "1.5.0",
+      "modules": ["Util", "Errors", "Theme", "I18n", "State", "Storage", "Store", "Router", "Bridge", "Components", "CSS", "Render", "ClientJS", "Http", "App"],
       "description": "Zero-dependency cross-platform reactive UI, DOM morphing, router, theme engine, and host effects."
     },
     {
       "id": "target-desktop",
       "name": "Desktop Native WebView SDK (Windows, macOS, Linux)",
       "path": "targets/host.html",
-      "version": "1.2.0",
+      "version": "1.5.0",
       "platforms": ["windows", "macos", "linux"],
       "description": "AOT/Bytecode native executable packaging with embedded WebView2 / WKWebView / WebKitGTK host shell."
     },
@@ -29,7 +29,7 @@
       "id": "target-web-pwa",
       "name": "Web & Mobile Offline PWA SDK",
       "path": "targets/wasmhost.template.html",
-      "version": "1.2.0",
+      "version": "1.5.0",
       "platforms": ["web", "pwa"],
       "description": "Off-main-thread Web Worker spid3r.wasm runtime with Service Worker offline cache and Home Screen manifest."
     },
@@ -37,7 +37,7 @@
       "id": "target-ios",
       "name": "iOS Native SwiftPM & xtool SDK",
       "path": "targets/ios/",
-      "version": "1.2.0",
+      "version": "1.5.0",
       "platforms": ["ios"],
       "description": "SwiftPM package + WKURLSchemeHandler (appstudio://app/) + xtool 1.24.0 codesigning and 16 KB USB .ipa installer."
     },
@@ -45,7 +45,7 @@
       "id": "target-android",
       "name": "Android Native Kotlin & Gradle SDK",
       "path": "targets/android/",
-      "version": "1.2.0",
+      "version": "1.5.0",
       "platforms": ["android"],
       "description": "Kotlin WebViewAssetLoader + OnBackPressedCallback hardware navigation + Gradle APK/AAB pipeline."
     }

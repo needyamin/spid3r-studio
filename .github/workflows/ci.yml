@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Spid3r v1.1.1
+      - name: Install Spid3r v1.5.0
         run: |
           sudo apt-get update -qq -o Acquire::Retries=3
           sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 ca-certificates curl gnupg lsb-release
@@ -65,7 +65,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Spid3r v1.1.1
+      - name: Install Spid3r v1.5.0
         run: |
           sudo apt-get update -qq -o Acquire::Retries=3
           sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 ca-certificates curl gnupg lsb-release
@@ -148,7 +148,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Spid3r v1.1.1
+      - name: Install Spid3r v1.5.0
         run: |
           sudo apt-get update -qq -o Acquire::Retries=3
           sudo apt-get install -y -qq --no-install-recommends -o Acquire::Retries=3 ca-certificates curl gnupg lsb-release

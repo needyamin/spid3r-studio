@@ -696,6 +696,80 @@ public fn studio_app() { return appkit.App("H2aApp", "sh.t.h2a", "1.0.0").page("
         "A-29 bundled I18n sets RTL direction in WASM output"
     );
 
+    // 17. Spid3r v1.5.0: multi-file enum + exhaustive match, named imports, stdlib passthrough,
+    //     destructuring let, bare catch, C-style for-let, and .mt module extension
+    let d_v15 = make_case_dir(dir, "spid3r_v15");
+    dir_create(d_v15 + "/pages");
+    write_file(
+        d_v15 + "/pages/Types.mt",
+        r#"public enum Role {
+    Guest,
+    Member(name, level),
+}
+public fn format_role(r) -> string {
+    return match (r) {
+        Role.Guest => "guest",
+        Role.Member(n, lv) => "member:" + n + ":" + string(lv)
+    };
+}
+"#
+    );
+    write_file(
+        d_v15 + "/pages/MathUtil.matrix",
+        r#"let secret_val = 42;
+public fn add_nums(a: int, b: int) -> int {
+    return a + b;
+}
+"#
+    );
+    write_file(
+        d_v15 + "/app.matrix",
+        r#"import "studio/App" as appkit;
+import "studio/Components" as ui;
+import "semver" as sv;
+import { Role, format_role as fmt_role } from "pages/Types";
+import { add_nums } from "pages/MathUtil";
+
+let a = 999;
+let b = 888;
+let e = "global-e";
+let i = 777;
+
+fn Home() -> map {
+    let (a, b) = (10, 20);
+    let sum = add_nums(a, b);
+    let caught = "ok";
+    try {
+        throw "boom";
+    } catch e {
+        caught = string(e);
+    }
+    let acc = 0;
+    for let i = 0; i < 4; i += 1 {
+        acc += i;
+    }
+    let r_str = fmt_role(Role.Member("Ada", 3));
+    let cmp = sv.compare("1.5.0", "1.1.1");
+    return ui.page([
+        ui.text("SUM=" + string(sum) + "|ERR=" + caught + "|ACC=" + string(acc) + "|ROLE=" + r_str + "|CMP=" + string(cmp)),
+    ]);
+}
+public fn studio_app() {
+    return appkit.App("V15App", "sh.t.v15", "1.5.0").page("Home", Home);
+}
+"#
+    );
+    let f_v15 = flatkit.bundle(d_v15);
+    check_ok(
+        f_v15 != "" and check_strict(f_v15, "spid3r_v15"),
+        "Spid3r v1.5.0 features (enum/match, named imports, stdlib, .mt, destructuring, bare catch, for-let) pass --deny-warnings"
+    );
+    let h_v15 = run_bundle_html(f_v15, "spid3r_v15");
+    check_ok(
+        h_v15.contains("SUM=30|ERR=boom|ACC=6|ROLE=member:Ada:3|CMP=1"),
+        "Spid3r v1.5.0 executed bundle renders exact enum/match, named import, stdlib, and scoping results"
+    );
+
     dir_remove(dir);
     println("flatkit passed: " + string(passed) + "  failed: " + string(failed));
     if failed > 0 {

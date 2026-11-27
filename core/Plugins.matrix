@@ -14,11 +14,11 @@ public fn core_extensions() -> list {
     ,
     {
         "id": "diagnostics-engine",
-        "name": "Spid3r v1.1.1 Diagnostics & Suggestion Engine",
+        "name": "Spid3r v1.5.0 Diagnostics & Suggestion Engine",
         "module": "core/Diagnostics.matrix",
         "category": "Debugger & QA",
         "status": "active",
-        "description": "Parses parser, semantic, formatter, and runtime errors and maps BUG-01..BUG-10 traps to actionable code fixes.",
+        "description": "Parses compiler, semantic, formatter, and runtime diagnostics and maps common Spid3r v1.5.0 errors to actionable fixes.",
     }
     ,
     {
@@ -27,7 +27,7 @@ public fn core_extensions() -> list {
         "module": "core/Recovery.matrix",
         "category": "Resilience",
         "status": "active",
-        "description": "Strips UTF-8 BOMs, converges 2-pass spid3r fmt, repairs vendor/studio, and exports reports to documents/.",
+        "description": "Strips UTF-8 BOMs, runs spid3r fmt convergence across .matrix/.mt files, repairs vendor/studio, and exports reports to documents/.",
     }
     ,
     {

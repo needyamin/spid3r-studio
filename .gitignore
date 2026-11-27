@@ -40,3 +40,7 @@ Thumbs.db
 .workbuddy-ai/
 AGENTS.md
 bugs.html
+
+# User workspace projects (keep official workspace/demo showcase tracked for CI & tests)
+workspace/*
+!workspace/demo/

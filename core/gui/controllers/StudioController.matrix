@@ -206,7 +206,7 @@ public fn trigger_auto_recovery(appdir: string = "") {
     let tgt = if appdir.trim() != "" {
         appdir.trim()
     } else {
-        string(state.get_or("active_project", "examples/demo"))
+        string(state.get_or("active_project", "workspace/demo"))
     };
     jobs.run_async("Auto-Recover Project: " + tgt, () => {
         if state.get_or("web_running", false) == true {

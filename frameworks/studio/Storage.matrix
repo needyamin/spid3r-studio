@@ -246,20 +246,10 @@ public fn save() -> bool {
     if file_exists(file_path()) {
         let _bk = copy_file(file_path(), backup_path());
     }
-    let tmp = file_path() + ".tmp";
-    let wr = write_file(tmp, payload);
+    let wr = write_file_atomic(file_path(), payload);
     if wr.is_err() {
         last_error = string(wr.unwrap_err());
         return false;
-    }
-    let rn = rename(tmp, file_path());
-    if rn.is_err() {
-        let wr2 = write_file(file_path(), payload);
-        let _rm = remove_file(tmp);
-        if wr2.is_err() {
-            last_error = string(wr2.unwrap_err());
-            return false;
-        }
     }
     disk_save_count += 1;
     dirty_flag = false;
@@ -311,14 +301,7 @@ public fn get_map(k: string) -> map {
 /// Delete a key and persist (unless batched/deferred).
 public fn remove(k: string) {
     if cache.has(k) {
-        let next = {
-        };
-        for (ck, cv) in cache {
-            if string(ck) != k {
-                next[ck] = cv;
-            }
-        }
-        cache = next;
+        let _removed = cache.remove(k);
         storage_version += 1;
         dirty_flag = true;
     }

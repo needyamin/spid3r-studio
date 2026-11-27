@@ -5,9 +5,10 @@
 import "studio/State" as state;
 import "gui/Jobs" as jobs;
 import "core/Plugins" as plugins;
+import "core/Version" as ver_info;
 
-public const STUDIO_VERSION = "1.2.0";
-public const SPID3R_TARGET_VER = "1.1.1";
+public const STUDIO_VERSION = ver_info.STUDIO_VERSION;
+public const SPID3R_TARGET_VER = ver_info.SPID3R_TARGET_VERSION;
 
 public fn init_architecture_dirs() {
     for d in [
@@ -329,8 +330,15 @@ public fn documentation_catalog() -> list {
     }
     ,
     {
+        "id": "dev-workflow",
+        "title": "Development Workflow & Release Guide",
+        "category": "Guide",
+        "path": "documents/guides/development-workflow.md",
+    }
+    ,
+    {
         "id": "matrix-tutorial",
-        "title": "Spid3r v1.1.1 & .matrix Authoring Tutorial",
+        "title": "Spid3r v" + SPID3R_TARGET_VER + " & .matrix Authoring Tutorial",
         "category": "Tutorial",
         "path": "documents/tutorials/matrix-language-tutorial.md",
     }

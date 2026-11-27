@@ -5,7 +5,7 @@ import "Fs" as fs;
 import "Manifest" as man;
 import "Exec" as ex;
 
-public fn cmd_run(appdir: string) -> int {
+public fn cmd_run(appdir: string, engine: string = "", devtools: bool = false) -> int {
     let entry = man.find_entry(appdir);
     if entry == "" {
         println(
@@ -16,7 +16,15 @@ public fn cmd_run(appdir: string) -> int {
     fs.setup_import_path();
     let host = fs.host_page(appdir);
     println("running " + entry + "  (close the window to exit)");
-    let r = exec_capture("spid3r", ["gui", entry, "--html", host], null);
+    let g_args = ["gui", entry, "--html", host];
+    if engine.trim() != "" {
+        g_args.push("--engine");
+        g_args.push(engine.trim());
+    }
+    if devtools {
+        g_args.push("--devtools");
+    }
+    let r = exec_capture("spid3r", g_args, null);
     if r.is_err() {
         println("error: failed to launch gui: " + string(r.unwrap_err()));
         return 1;
@@ -102,7 +110,7 @@ fn list_contains(xs: list, v: string) -> bool {
     return false;
 }
 
-public fn cmd_dev(appdir: string) -> int {
+public fn cmd_dev(appdir: string, engine: string = "", devtools: bool = false) -> int {
     let entry = man.find_entry(appdir);
     if entry == "" {
         println("error: no app entry found in " + appdir);
@@ -163,7 +171,15 @@ public fn cmd_dev(appdir: string) -> int {
                 }
             }
         };
-        let r = exec_capture("spid3r", ["gui", entry, "--html", host], null);
+        let g_args = ["gui", entry, "--html", host];
+        if engine.trim() != "" {
+            g_args.push("--engine");
+            g_args.push(engine.trim());
+        }
+        if devtools {
+            g_args.push("--devtools");
+        }
+        let r = exec_capture("spid3r", g_args, null);
         write_file(done_flag, "1");
         sleep_ms(450);
         if file_exists(done_flag) {

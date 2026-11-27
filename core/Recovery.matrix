@@ -57,13 +57,15 @@ fn collect_project_matrix_files(dir: string, out: list) {
                 continue;
             }
             collect_project_matrix_files(p, out);
-        } elif is_file(p) and (name.ends_with(".matrix") or name == "studio.json") {
+        } elif is_file(p) and (
+            name.ends_with(".matrix") or name.ends_with(".mt") or name == "studio.json"
+        ) {
             out.push(p);
         }
     }
 }
 
-/// Format a list of .matrix files twice to guarantee Spid3r v1.1.1 formatter convergence (BUG-08).
+/// Format a list of .matrix/.mt files cleanly with BOM stripping and convergence pass.
 public fn format_two_pass(matrix_files: list) -> bool {
     if matrix_files.len() == 0 {
         return true;
@@ -71,7 +73,7 @@ public fn format_two_pass(matrix_files: list) -> bool {
     let args = ["fmt"];
     for f in matrix_files {
         let sf = string(f);
-        if sf.ends_with(".matrix") {
+        if sf.ends_with(".matrix") or sf.ends_with(".mt") {
             sanitize_file_no_bom(sf);
             args.push(sf);
         }
@@ -125,7 +127,7 @@ public fn recover_project(appdir: string, fw_root: string = ".") -> map {
     for f in files {
         let sf = string(f);
         sanitize_file_no_bom(sf);
-        if sf.ends_with(".matrix") {
+        if sf.ends_with(".matrix") or sf.ends_with(".mt") {
             matrix_only.push(sf);
         }
     }

@@ -110,10 +110,21 @@ fn is_hex_sha256(s: string) -> bool {
     return true;
 }
 
-/// Compute lowercase 64-hex SHA-256 digest of a file on disk (A-14).
+/// Compute lowercase 64-hex SHA-256 digest of a file on disk using Spid3r v1.5.0 native builtins.
 public fn sha256_file(path: string) -> string {
     if not file_exists(path) {
         return "";
+    }
+    try {
+        let rb = read_bytes(path);
+        if rb.is_ok() {
+            let dig = string(sha256(rb.unwrap())).trim().lower();
+            if is_hex_sha256(dig) {
+                return dig;
+            }
+        }
+    } catch (_e) {
+        let _skip = _e;
     }
     if fs.is_windows() {
         let rc = exec_capture("certutil", ["-hashfile", path, "SHA256"], null);
@@ -135,33 +146,6 @@ public fn sha256_file(path: string) -> string {
                 return tok;
             }
         }
-        let rm = exec_capture("shasum", ["-a", "256", path], null);
-        if rm.is_ok() and int(rm.unwrap()["code"]) == 0 {
-            let tok2 = string(
-                string(rm.unwrap()["stdout"]).trim().split(" ")[0]
-            ).trim().lower();
-            if is_hex_sha256(tok2) {
-                return tok2;
-            }
-        }
-    }
-    let py_cmd = if fs.is_windows() {
-        "python"
-    } else {
-        "python3"
-    };
-    let rp = exec_capture(
-        py_cmd,
-        ["-c",
-        "import hashlib,sys;h=hashlib.sha256();f=open(sys.argv[1],'rb');h.update(f.read());f.close();print(h.hexdigest())",
-        path],
-        null
-    );
-    if rp.is_ok() and int(rp.unwrap()["code"]) == 0 {
-        let dig = string(rp.unwrap()["stdout"]).trim().lower();
-        if is_hex_sha256(dig) {
-            return dig;
-        }
     }
     return "";
 }
@@ -172,51 +156,11 @@ public fn sha256_base64_file(path: string) -> string {
     if hex == "" {
         return "";
     }
-    let py_cmd = if fs.is_windows() {
-        "python"
-    } else {
-        "python3"
-    };
-    let rp = exec_capture(
-        py_cmd,
-        ["-c",
-        "import base64,hashlib,sys;print(base64.b64encode(hashlib.sha256(open(sys.argv[1],'rb').read()).digest()).decode())",
-        path],
-        null
-    );
-    if rp.is_ok() and int(rp.unwrap()["code"]) == 0 {
-        let b64 = string(rp.unwrap()["stdout"]).trim();
-        if b64 != "" {
-            return b64;
-        }
+    try {
+        return string(base64_encode(hex_decode(hex))).trim();
+    } catch (_e) {
+        return "";
     }
-    let ro = exec_capture("openssl", ["dgst", "-sha256", "-binary", path], null);
-    if ro.is_ok() and int(ro.unwrap()["code"]) == 0 {
-        // Fallback when python is absent: try openssl base64 pipeline via shell
-        let sh_cmd = if fs.is_windows() {
-            "powershell"
-        } else {
-            "sh"
-        };
-        let args = if fs.is_windows() {
-            ["-NoProfile",
-            "-Command",
-            "[Convert]::ToBase64String([System.Security.Cryptography.SHA256]::Create().ComputeHash([System.IO.File]::ReadAllBytes('" + path.replace("'", "''") + "')))"]
-        } else {
-            ["-c",
-            "openssl dgst -sha256 -binary \"$1\" | base64",
-            "_",
-            path]
-        };
-        let rs = exec_capture(sh_cmd, args, null);
-        if rs.is_ok() and int(rs.unwrap()["code"]) == 0 {
-            let out = string(rs.unwrap()["stdout"]).trim();
-            if out != "" {
-                return out;
-            }
-        }
-    }
-    return "";
 }
 
 /// Format an integrity="sha256-..." attribute for an emitted local script asset (A-31).

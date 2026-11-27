@@ -101,14 +101,10 @@ public fn fw_root_abs() -> string {
     if cached != "" {
         return cached;
     }
-    let r = if is_windows() {
-        exec_capture("cmd", ["/c", "cd"], null)
-    } else {
-        exec_capture("pwd", [], null)
-    };
     let res = ".";
-    if r.is_ok() and int(r.unwrap()["code"]) == 0 {
-        let out = trim_slash(first_line(string(r.unwrap()["stdout"])));
+    let c = cwd();
+    if c.is_ok() {
+        let out = trim_slash(string(c.unwrap()));
         if out != "" {
             res = out;
         }

@@ -1492,6 +1492,40 @@ public fn SubPage() -> map {
         "A-05 all 7 capability helpers emit structured host effects"
     );
 
+    // ---------- Spid3r v1.5.0: Native window bridge & lifecycle hooks + Store remove() ----------
+    let win_log = [];
+    br.install_window_api({
+        "size": (w, h) => win_log.push("size:" + string(w) + "x" + string(h)),
+        "min_size": (w, h) => win_log.push("min:" + string(w) + "x" + string(h)),
+        "theme": (m) => win_log.push("theme:" + string(m)),
+        "bg_color": (c) => win_log.push("bg:" + string(c)),
+        "icon": (p) => win_log.push("icon:" + string(p)),
+        "devtools": (b) => win_log.push("dev:" + string(b)),
+    });
+    br.set_window_size(1200, 800);
+    br.set_window_min_size(640, 480);
+    br.set_window_theme("dark");
+    br.set_window_bg_color("#0b0f1a");
+    br.set_window_icon("app.ico");
+    br.set_devtools(true);
+    check_eq(win_log.len(), 6, "Spid3r v1.5.0 window_api delegates all window controls");
+    check_ok(
+        win_log[0] == "size:1200x800" and win_log[2] == "theme:dark" and win_log[5] == "dev:true",
+        "Spid3r v1.5.0 window_api forwards exact arguments"
+    );
+    let configured_app = appkit.App("WinApp", "sh.t.win", "1.5.0")
+    .window_size(1024, 768)
+    .window_min_size(600, 400)
+    .window_bg("#111827")
+    .on_resize((_ev) => {
+    })
+    .on_before_close((_ev) => {
+    });
+    check_eq(configured_app.version, "1.5.0", "App fluent window config returns App");
+
+    let n1 = br.session_nonce();
+    check_ok(n1.len() >= 8, "Bridge.session_nonce generates CSPRNG hex nonce");
+
     state.reset();
     theme.reset();
     i18n.reset();

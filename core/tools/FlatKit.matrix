@@ -131,7 +131,30 @@ fn basename_no_ext(p: string) -> string {
     if f.ends_with(".matrix") {
         return f.slice(0, f.len() - 7);
     }
+    if f.ends_with(".mt") {
+        return f.slice(0, f.len() - 3);
+    }
     return f;
+}
+
+const STDLIB_MODULES = [
+"assert", "bigint", "complex", "decimal", "event", "fastcgi", "ftp",
+"gen", "http", "mathx", "middleware", "mock", "multipart", "rational",
+"semver", "session", "smtp", "stats", "testkit", "toml", "tz",
+"unicode", "uuid", "web", "xml", "yaml",
+];
+
+fn is_stdlib_module(raw_path: string) -> bool {
+    let rp = norm_slash(raw_path);
+    if rp.contains("/") or rp.ends_with(".matrix") or rp.ends_with(".mt") {
+        return false;
+    }
+    for m in STDLIB_MODULES {
+        if rp == m {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn sanitize_mod_id(raw: string) -> string {
@@ -483,8 +506,77 @@ fn analyze_module(toks: list, mod_id: string, is_entry: bool) -> map {
                         end_idx = n - 1;
                     }
                     imports.push({
-                        "path": raw_path, "alias": alias, "start": i, "end": end_idx
+                        "kind": "ns",
+                        "path": raw_path,
+                        "alias": alias,
+                        "named": [],
+                        "start": i,
+                        "end": end_idx,
                     });
+                    i = end_idx + 1;
+                    continue;
+                } elif p_idx >= 0 and string(toks[p_idx]["text"]) == "{" {
+                    let named_list = [];
+                    let cur = next_sig(toks, p_idx + 1);
+                    while cur >= 0 and string(toks[cur]["text"]) != "}" {
+                        if string(toks[cur]["kind"]) == "ident" {
+                            let orig_n = string(toks[cur]["text"]);
+                            let local_n = orig_n;
+                            let nxt = next_sig(toks, cur + 1);
+                            if nxt >= 0 and string(toks[nxt]["kind"]) == "ident" and string(toks[nxt]["text"]) == "as" {
+                                let as_idx = next_sig(toks, nxt + 1);
+                                if as_idx >= 0 and string(toks[as_idx]["kind"]) == "ident" {
+                                    local_n = string(toks[as_idx]["text"]);
+                                    cur = next_sig(toks, as_idx + 1);
+                                } else {
+                                    cur = nxt;
+                                }
+                            } else {
+                                cur = nxt;
+                            }
+                            named_list.push({
+                                "orig": orig_n, "local": local_n
+                            });
+                            if cur >= 0 and string(toks[cur]["text"]) == "," {
+                                cur = next_sig(toks, cur + 1);
+                            }
+                        } else {
+                            cur = next_sig(toks, cur + 1);
+                        }
+                    }
+                    let from_idx = if cur >= 0 {
+                        next_sig(toks, cur + 1)
+                    } else {
+                        -1
+                    };
+                    let raw_path = "";
+                    let end_idx = cur;
+                    if from_idx >= 0 and string(toks[from_idx]["kind"]) == "ident" and string(toks[from_idx]["text"]) == "from" {
+                        let s_idx = next_sig(toks, from_idx + 1);
+                        if s_idx >= 0 and string(toks[s_idx]["kind"]) == "str" {
+                            raw_path = unquote_str(string(toks[s_idx]["text"]));
+                            end_idx = next_sig(toks, s_idx + 1);
+                        }
+                    }
+                    if end_idx < 0 {
+                        end_idx = n - 1;
+                    }
+                    while end_idx < n and string(toks[end_idx]["text"]) != ";" {
+                        end_idx += 1;
+                    }
+                    if end_idx >= n {
+                        end_idx = n - 1;
+                    }
+                    if raw_path != "" {
+                        imports.push({
+                            "kind": "named",
+                            "path": raw_path,
+                            "alias": "",
+                            "named": named_list,
+                            "start": i,
+                            "end": end_idx,
+                        });
+                    }
                     i = end_idx + 1;
                     continue;
                 }
@@ -736,6 +828,48 @@ fn match_paren(toks: list, open_idx: int) -> int {
     return -1;
 }
 
+/// True if `idx` starts a guarded match-arm suffix `if <cond> => ...` before `{`, `}`, `;`, or `,`.
+fn has_match_guard_arrow(toks: list, idx: int) -> bool {
+    if idx < 0 or idx >= toks.len() or string(toks[idx]["text"]) != "if" {
+        return false;
+    }
+    let pd = 0;
+    let bd = 0;
+    let i = idx + 1;
+    let n = toks.len();
+    while i < n {
+        let k = string(toks[i]["kind"]);
+        let t = string(toks[i]["text"]);
+        if k == "ws" or k == "comment" {
+            i += 1;
+            continue;
+        }
+        if t == "(" {
+            pd += 1;
+        } elif t == ")" {
+            if pd == 0 {
+                return false;
+            }
+            pd -= 1;
+        } elif t == "[" {
+            bd += 1;
+        } elif t == "]" {
+            if bd > 0 {
+                bd -= 1;
+            }
+        } elif pd == 0 and bd == 0 {
+            if t == "=>" {
+                return true;
+            }
+            if t == "{" or t == "}" or t == ";" or t == "," {
+                return false;
+            }
+        }
+        i += 1;
+    }
+    return false;
+}
+
 /// Skip optional generic type parameter list <...> starting at lt_idx, returning index after '>'.
 fn skip_generics(toks: list, lt_idx: int) -> int {
     if lt_idx < 0 or lt_idx >= toks.len() or string(toks[lt_idx]["text"]) != "<" {
@@ -766,6 +900,9 @@ fn rewrite_str_token(
     locals: map,
     alias_exports: map,
     alias_privates: map,
+    named_exports: map,
+    named_privates: map,
+    stdlib_aliases: map,
     scopes: list,
     mod_id: string,
     errors: list
@@ -829,6 +966,9 @@ fn rewrite_str_token(
                     locals,
                     alias_exports,
                     alias_privates,
+                    named_exports,
+                    named_privates,
+                    stdlib_aliases,
                     scopes,
                     1,
                     mod_id,
@@ -856,6 +996,9 @@ fn emit_tokens(
     locals: map,
     alias_exports: map,
     alias_privates: map,
+    named_exports: map,
+    named_privates: map,
+    stdlib_aliases: map,
     base_scopes: list,
     start_depth: int,
     mod_id: string,
@@ -884,6 +1027,8 @@ fn emit_tokens(
     let block_paren_end = -1;
     let arrow_pending_params = [];
     let arrow_paren_end = -1;
+    let let_pending_params = [];
+    let let_paren_end = -1;
     let loop_var_idx = -1;
     let let_decl_idx = -1;
     let in_type_hdr = false;
@@ -950,6 +1095,9 @@ fn emit_tokens(
                     locals,
                     alias_exports,
                     alias_privates,
+                    named_exports,
+                    named_privates,
+                    stdlib_aliases,
                     scopes,
                     mod_id,
                     errors
@@ -971,6 +1119,8 @@ fn emit_tokens(
                         block_paren_end = -1;
                         arrow_pending_params = [];
                         arrow_paren_end = -1;
+                        let_pending_params = [];
+                        let_paren_end = -1;
                         loop_var_idx = -1;
                         let_decl_idx = -1;
                     }
@@ -980,7 +1130,9 @@ fn emit_tokens(
                 let close_i = match_paren(toks, i);
                 if close_i >= 0 {
                     let after = next_sig(toks, close_i + 1);
-                    if after >= 0 and string(toks[after]["text"]) == "=>" {
+                    if after >= 0 and (
+                        string(toks[after]["text"]) == "=>" or has_match_guard_arrow(toks, after)
+                    ) {
                         arrow_pending_params = collect_paren_params(toks, i);
                         arrow_paren_end = close_i;
                     }
@@ -1153,6 +1305,19 @@ fn emit_tokens(
                         }
                     }
                 }
+            } elif at_class_body and text == "new" {
+                let p_idx = next_sig(toks, i + 1);
+                if p_idx >= 0 and string(toks[p_idx]["text"]) == "(" {
+                    block_pending_params = [];
+                    block_paren_end = -1;
+                    let c_idx = match_paren(toks, p_idx);
+                    if c_idx > block_paren_end {
+                        block_paren_end = c_idx;
+                    }
+                    for pp in collect_paren_params(toks, p_idx) {
+                        block_pending_params.push(pp);
+                    }
+                }
             }
 
             // Shadow variable capture inside function/block bodies (NOT class field declarations)
@@ -1170,11 +1335,35 @@ fn emit_tokens(
                                 "bracket": bracket_depth,
                             });
                         }
+                    } elif v_idx >= 0 and string(toks[v_idx]["text"]) == "(" {
+                        let c_let = match_paren(toks, v_idx);
+                        let_pending_params = collect_paren_params(toks, v_idx);
+                        let_paren_end = c_let;
+                        for lp in let_pending_params {
+                            let lps = string(lp);
+                            if lps != "_" {
+                                deferred_lets.push({
+                                    "name": lps,
+                                    "paren": paren_depth,
+                                    "brace": depth,
+                                    "bracket": bracket_depth,
+                                });
+                            }
+                        }
                     }
                 } elif text == "for" {
                     let nxt = next_sig(toks, i + 1);
                     if nxt >= 0 {
-                        if string(toks[nxt]["kind"]) == "ident" {
+                        if string(toks[nxt]["kind"]) == "ident" and string(toks[nxt]["text"]) == "let" {
+                            let nxt2 = next_sig(toks, nxt + 1);
+                            if nxt2 >= 0 and string(toks[nxt2]["kind"]) == "ident" {
+                                let lvar2 = string(toks[nxt2]["text"]);
+                                if lvar2 != "_" {
+                                    block_pending_params.push(lvar2);
+                                }
+                                loop_var_idx = nxt2;
+                            }
+                        } elif string(toks[nxt]["kind"]) == "ident" {
                             let lvar = string(toks[nxt]["text"]);
                             if lvar != "_" {
                                 block_pending_params.push(lvar);
@@ -1204,6 +1393,12 @@ fn emit_tokens(
                                 block_pending_params.push(cp);
                             }
                         }
+                    } elif nxt >= 0 and string(toks[nxt]["kind"]) == "ident" {
+                        let cvar = string(toks[nxt]["text"]);
+                        if cvar != "_" {
+                            block_pending_params.push(cvar);
+                        }
+                        loop_var_idx = nxt;
                     }
                 }
             }
@@ -1226,15 +1421,40 @@ fn emit_tokens(
                 continue;
             }
 
-            // Keep parameter declarations in fn/lambda/for/catch signatures unprefixed
+            // Keep parameter declarations in fn/lambda/for/catch/destructuring signatures unprefixed
             let in_block_param = i <= block_paren_end and (prev_sig == "(" or prev_sig == ",") and list_has_str(block_pending_params, text);
             let in_arrow_param = i <= arrow_paren_end and (prev_sig == "(" or prev_sig == ",") and list_has_str(arrow_pending_params, text);
-            if in_block_param or in_arrow_param {
+            let in_let_param = i <= let_paren_end and (prev_sig == "(" or prev_sig == ",") and list_has_str(let_pending_params, text);
+            if in_block_param or in_arrow_param or in_let_param {
                 out.push(text);
                 prev_sig = "ident";
                 prev_word = text;
                 i += 1;
                 continue;
+            }
+
+            // Named argument label `fn(arg: val)` — keep label unprefixed
+            if paren_depth > 0 and prev_sig != "." {
+                let col_idx = next_sig(toks, i + 1);
+                if col_idx >= 0 and string(toks[col_idx]["text"]) == ":" {
+                    out.push(text);
+                    prev_sig = "ident";
+                    prev_word = text;
+                    i += 1;
+                    continue;
+                }
+            }
+
+            // Stdlib alias qualification `sv.compare` -> `__std_semver.compare`
+            if prev_sig != "." and not is_shadowed(scopes, text) and stdlib_aliases.has(text) {
+                let sd_idx = next_sig(toks, i + 1);
+                if sd_idx >= 0 and string(toks[sd_idx]["text"]) == "." {
+                    out.push(string(stdlib_aliases[text]));
+                    prev_sig = "ident";
+                    prev_word = text;
+                    i += 1;
+                    continue;
+                }
             }
 
             // Check alias.member qualification & enforce module visibility (A-06)
@@ -1259,6 +1479,22 @@ fn emit_tokens(
                             );
                         }
                     }
+                }
+            }
+
+            // Named imports `import { a, b as c } from "mod"`
+            if prev_sig != "." and not is_shadowed(scopes, text) {
+                if named_exports.has(text) {
+                    out.push(string(named_exports[text]));
+                    prev_sig = "ident";
+                    prev_word = text;
+                    i += 1;
+                    continue;
+                }
+                if named_privates.has(text) {
+                    errors.push(
+                        "module '" + mod_id + "' cannot access private symbol '" + text + "'"
+                    );
                 }
             }
 
@@ -1317,6 +1553,8 @@ fn rel_mod_id(ad: string, file_path: string, used_mod_ids: map) -> string {
     }
     if rel.ends_with(".matrix") {
         rel = rel.slice(0, rel.len() - 7);
+    } elif rel.ends_with(".mt") {
+        rel = rel.slice(0, rel.len() - 3);
     }
     let base = "u_" + sanitize_mod_id(rel);
     if not used_mod_ids.has(base) or string(used_mod_ids[base]) == file_path {
@@ -1336,16 +1574,22 @@ fn rel_mod_id(ad: string, file_path: string, used_mod_ids: map) -> string {
 
 fn resolve_user_import(ad: string, cur_file: string, raw_path: string) -> string {
     let rp = norm_slash(raw_path);
-    if not rp.ends_with(".matrix") {
-        rp += ".matrix";
+    let cands = [];
+    if rp.ends_with(".matrix") or rp.ends_with(".mt") {
+        cands.push(rp);
+    } else {
+        cands.push(rp + ".matrix");
+        cands.push(rp + ".mt");
     }
-    let c1 = clean_path(join_p(dir_of(cur_file), rp));
-    if file_exists(c1) {
-        return c1;
-    }
-    let c2 = clean_path(join_p(ad, rp));
-    if file_exists(c2) {
-        return c2;
+    for cand in cands {
+        let c1 = clean_path(join_p(dir_of(cur_file), cand));
+        if file_exists(c1) {
+            return c1;
+        }
+        let c2 = clean_path(join_p(ad, cand));
+        if file_exists(c2) {
+            return c2;
+        }
     }
     return "";
 }
@@ -1356,6 +1600,7 @@ fn walk_user_module(
     is_entry: bool,
     fw_exports: map,
     fw_privates: map,
+    stdlib_used: map,
     visiting: map,
     visited: map,
     mod_map: map,
@@ -1384,17 +1629,41 @@ fn walk_user_module(
     };
     let resolved_privates = {
     };
+    let resolved_named = {
+    };
+    let resolved_named_priv = {
+    };
+    let resolved_stdlib = {
+    };
 
     for imp in analysis["imports"] {
         let rp = norm_slash(string(imp["path"]));
+        let ikind = if imp.has("kind") {
+            string(imp["kind"])
+        } else {
+            "ns"
+        };
         let alias = string(imp["alias"]);
         let target = basename_no_ext(rp);
-        if (
+        let is_fw = (
             rp.starts_with("studio/") or rp.starts_with("vendor/studio/") or rp.contains("/studio/")
-        ) and fw_exports.has(target) {
-            resolved_aliases[alias] = fw_exports[target];
-            if fw_privates.has(target) {
-                resolved_privates[alias] = fw_privates[target];
+        ) and fw_exports.has(target);
+        if is_fw {
+            if ikind == "named" {
+                for ni in imp["named"] {
+                    let orig_n = string(ni["orig"]);
+                    let local_n = string(ni["local"]);
+                    if fw_exports[target].has(orig_n) {
+                        resolved_named[local_n] = fw_exports[target][orig_n];
+                    } elif fw_privates.has(target) and fw_privates[target].has(orig_n) {
+                        resolved_named_priv[local_n] = true;
+                    }
+                }
+            } else {
+                resolved_aliases[alias] = fw_exports[target];
+                if fw_privates.has(target) {
+                    resolved_privates[alias] = fw_privates[target];
+                }
             }
         } else {
             let dep_path = resolve_user_import(ad, cp, rp);
@@ -1405,6 +1674,7 @@ fn walk_user_module(
                     false,
                     fw_exports,
                     fw_privates,
+                    stdlib_used,
                     visiting,
                     visited,
                     mod_map,
@@ -1415,8 +1685,34 @@ fn walk_user_module(
                     return false;
                 }
                 if mod_map.has(dep_path) {
-                    resolved_aliases[alias] = mod_map[dep_path]["analysis"]["exports"];
-                    resolved_privates[alias] = mod_map[dep_path]["analysis"]["privates"];
+                    let dep_ex = mod_map[dep_path]["analysis"]["exports"];
+                    let dep_pr = mod_map[dep_path]["analysis"]["privates"];
+                    if ikind == "named" {
+                        for ni in imp["named"] {
+                            let orig_n = string(ni["orig"]);
+                            let local_n = string(ni["local"]);
+                            if dep_ex.has(orig_n) {
+                                resolved_named[local_n] = dep_ex[orig_n];
+                            } elif dep_pr.has(orig_n) {
+                                resolved_named_priv[local_n] = true;
+                            }
+                        }
+                    } else {
+                        resolved_aliases[alias] = dep_ex;
+                        resolved_privates[alias] = dep_pr;
+                    }
+                }
+            } elif is_stdlib_module(rp) {
+                let std_alias = "__std_" + rp;
+                stdlib_used[rp] = std_alias;
+                if ikind == "named" {
+                    for ni in imp["named"] {
+                        let orig_n = string(ni["orig"]);
+                        let local_n = string(ni["local"]);
+                        resolved_named[local_n] = std_alias + "." + orig_n;
+                    }
+                } else {
+                    resolved_stdlib[alias] = std_alias;
                 }
             }
         }
@@ -1428,6 +1724,9 @@ fn walk_user_module(
         "analysis": analysis,
         "aliases": resolved_aliases,
         "privates": resolved_privates,
+        "named": resolved_named,
+        "named_priv": resolved_named_priv,
+        "stdlib": resolved_stdlib,
     };
     visited[cp] = true;
     visiting.remove(cp);
@@ -1469,6 +1768,10 @@ fn resolve_bundle_entry(ad: string, explicit_entry: string) -> string {
     if file_exists(app_p) {
         return app_p;
     }
+    let app_mt = clean_path(join_p(ad, "app.mt"));
+    if file_exists(app_mt) {
+        return app_mt;
+    }
     let manifest_entry = "";
     let mf_r = read_file(clean_path(join_p(ad, "studio.json")));
     if mf_r.is_ok() {
@@ -1490,6 +1793,10 @@ fn resolve_bundle_entry(ad: string, explicit_entry: string) -> string {
     let main_p = clean_path(join_p(ad, "main.matrix"));
     if file_exists(main_p) {
         return main_p;
+    }
+    let main_mt = clean_path(join_p(ad, "main.mt"));
+    if file_exists(main_mt) {
+        return main_mt;
     }
     if manifest_entry != "" {
         last_bundle_error = "missing app entry file in " + ad + " (studio.json entry '" + manifest_entry + "' and app.matrix not found)";
@@ -1550,6 +1857,8 @@ public fn bundle_entry(appdir: string, entry_file: string = "") -> string {
     };
     let used_mod_ids = {
     };
+    let stdlib_used = {
+    };
     let user_order = [];
     if not walk_user_module(
         ad,
@@ -1557,6 +1866,7 @@ public fn bundle_entry(appdir: string, entry_file: string = "") -> string {
         true,
         fw_exports,
         fw_privates,
+        stdlib_used,
         visiting,
         visited,
         mod_map,
@@ -1576,11 +1886,22 @@ public fn bundle_entry(appdir: string, entry_file: string = "") -> string {
     }
 
     // Pass 3: emit flattened output in a single scope-aware pass per module
+    // Spid3r grammar requires all top-level `import` statements to precede declarations.
     let chunks = [
     "// AppStudio flat bundle (generated by FlatKit — do not edit)\n",
-    "// The host substitutes the sentinel envelope line below per eval.\n\n",
-    "let STUDIO_EVENT_JSON = \"\";\n\n",
+    "// The host substitutes the sentinel envelope line below per eval.\n",
     ];
+    if stdlib_used.len() > 0 {
+        let std_names = [];
+        for (sn, _sa) in stdlib_used {
+            std_names.push(string(sn));
+        }
+        std_names.sort();
+        for sn in std_names {
+            chunks.push("import \"" + sn + "\" as " + string(stdlib_used[sn]) + ";\n");
+        }
+    }
+    chunks.push("\nlet STUDIO_EVENT_JSON = \"\";\n\n");
     let cur_line = 1;
     for hc in chunks {
         cur_line += count_newlines(string(hc));
@@ -1601,17 +1922,10 @@ public fn bundle_entry(appdir: string, entry_file: string = "") -> string {
                 aprivs[alias] = fw_privates[target];
             }
         }
-        let emitted = emit_tokens(
-            fw_toks[name],
-            an["imports"],
-            an["locals"],
-            aliases,
-            aprivs,
-            [],
-            0,
-            name,
-            emit_errors
-        );
+        let emitted = emit_tokens(fw_toks[name], an["imports"], an["locals"], aliases, aprivs, {
+        }, {
+        }, {
+        }, [], 0, name, emit_errors);
         let start_l = cur_line;
         let end_l = start_l + count_newlines(emitted);
         last_line_map.push({
@@ -1634,6 +1948,9 @@ public fn bundle_entry(appdir: string, entry_file: string = "") -> string {
             uan["locals"],
             rec["aliases"],
             rec["privates"],
+            rec["named"],
+            rec["named_priv"],
+            rec["stdlib"],
             [],
             0,
             string(uan["mod_id"]),

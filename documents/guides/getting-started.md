@@ -1,28 +1,81 @@
 # Spid3r Studio — Getting Started Guide
 
-Welcome to **Spid3r Studio**, the cross-platform application development environment for building **iOS**, **Android**, **Windows**, **macOS**, **Linux**, and **Web/PWA** applications from a single `.matrix` codebase.
+Welcome to **Spid3r Studio (v1.5.0)**, the cross-platform application development environment for building **iOS**, **Android**, **Windows**, **macOS**, **Linux**, and **Web/PWA** applications from a single `.matrix` / `.mt` codebase.
 
-## 1. A–Z Directory Architecture
+---
 
-Spid3r Studio organizes your environment into five clean tiers:
+## 1. Prerequisites
 
-1. **`frameworks/`** (paired with `studio/`, `targets/`, `templates/`): Core UI components, router, state, storage, theme tokens, host bridges, and platform SDK templates.
-2. **`downloads/`**: Dedicated storage for large toolchains, SDK installers, `xtool 1.24.0`, and cached `spid3r.wasm` runtime binaries.
-3. **`documents/`**: Developer guides (`guides/`), tutorials (`tutorials/`), configuration references (`references/`), persistent build logs (`logs/`), and QA reports (`reports/`).
-4. **`workspace/`**: Your dedicated development workspace where new projects are created, edited, compiled, tested, and packaged.
-5. **`core/`** (paired with `cli/`, `tools/`, `gui/`): Application engine, compiler diagnostics, automated failure recovery, plugin registry, FlatKit bundler, and the MVC Control Panel GUI.
+1. **Install Spid3r v1.5.0+** (`spid3r` and `sp` on `PATH`):
+   - **Windows:** Install from the [Microsoft Store](https://apps.microsoft.com/detail/9NPH5XX0F6KF) (`9NPH5XX0F6KF`) or run `Spid3r-Setup-<version>.exe` from [Spid3r Releases](https://github.com/needyamin/spid3r/releases).
+   - **Linux / macOS:**
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/needyamin/spid3r/main/install.sh | sh
+     ```
+2. **Optional target toolchains:**
+   - **Web / PWA & Desktop:** Zero extra tools required (`spid3r` includes the desktop WebView host, AOT compiler, and WASM runtime).
+   - **Android:** JDK 17+, Gradle 8.5+, Android SDK (`ANDROID_HOME`), and `adb`.
+   - **iOS (without a Mac):** `xtool 1.24.0`, Swift 6.x (via WSL2 on Windows or native Linux), Darwin Swift SDK (`Xcode.xip`), and `usbmuxd`/`ideviceinstaller`.
+3. **Verify setup** from the repository root:
+   ```powershell
+   spid3r run studio.matrix doctor
+   ```
 
-## 2. Launching the Control Panel GUI
+---
 
-- **Windows Double-Click:** Run `AppStudio.bat`
+## 2. 5-Tier A–Z Directory Architecture
+
+Spid3r Studio organizes your environment into five top-level directories:
+
+1. **`frameworks/`** — Core UI framework (`frameworks/studio/`), 6-OS target SDK templates (`frameworks/targets/`), starter templates (`frameworks/templates/`), and `registry.json`.
+2. **`downloads/`** — Managed toolchains (`xtool 1.24.0`, `Xcode.xip`), versioned `spid3r.wasm` runtime cache (`downloads/wasm-runtime/<version>/`), and `packages/catalog.json`.
+3. **`documents/`** — Developer Handbook (`documentation.html`), guides (`guides/`), tutorials (`tutorials/`), configuration reference (`references/`), logs (`logs/`), and QA reports (`reports/`).
+4. **`workspace/`** — Your dedicated application workspace (`workspace/demo/` showcase app plus your own projects).
+5. **`core/`** — CLI commands (`core/cli/`), FlatKit bundler (`core/tools/`), MVC Control Panel (`core/gui/`), diagnostics, recovery, and automated test suites (`core/tests/`).
+
+---
+
+## 3. Launching the MVC Control Panel GUI
+
+- **Windows Double-Click:** Open `AppStudio.bat`.
 - **Command Line:**
   ```powershell
   spid3r run studio.matrix gui
   ```
 
-## 3. Core Workflow
+Inside the Control Panel:
+- **Workspace:** Browse the 5 tiers, switch active projects, or scaffold a new app in `workspace/<AppName>`.
+- **Code & Debugger:** Edit `.matrix`/`.mt` or `studio.json`, run **Compile & Check**, auto-format with `spid3r fmt`, or trigger **1-Click Recovery**.
+- **Platforms (6 OS):** Preview on Desktop, launch the live-reload Web/PWA LAN server, build/install an iOS `.ipa`, or assemble an Android APK.
+- **Downloads & SDKs:** Audit missing dependencies and install managed SDKs.
+- **Tests & QA:** Run the full formatting, static check, and test pipeline.
+- **Docs & Logs:** Read documentation, inspect `core/Plugins` extensions, and export diagnostic reports.
 
-1. **Create or Select a Project:** Open the **Workspace** tab in the Control Panel to create a new app in `workspace/<AppName>` or switch between projects.
-2. **Edit & Debug `.matrix` Code:** Open **Code & Debugger** to browse project files, edit `.matrix` source or `studio.json`, run **Compile & Check**, auto-format code, or trigger **1-Click Recovery**.
-3. **Build & Deploy to 6 Platforms:** Open **Platforms** to preview on Desktop (Windows/macOS/Linux), start the live Web/PWA LAN server, build/install a signed iOS `.ipa`, or assemble/deploy an Android `.apk`.
-4. **Manage Downloads & SDKs:** Open **Downloads & SDKs** to probe toolchains and run 1-click dependency installers.
+---
+
+## 4. Your First App via CLI
+
+```powershell
+# 1. Create a new project in workspace/
+spid3r run studio.matrix new HelloStudio workspace/HelloStudio
+
+# 2. Preview on your desktop with hot reload
+spid3r run studio.matrix dev workspace/HelloStudio
+
+# 3. Preview on your phone over Wi-Fi (Web/PWA WASM server)
+spid3r run studio.matrix dev workspace/HelloStudio --target web --host 0.0.0.0 --port 8080
+
+# 4. Build for production
+spid3r run studio.matrix build workspace/HelloStudio --target web --release
+spid3r run studio.matrix build workspace/HelloStudio --target desktop --release
+spid3r run studio.matrix build workspace/HelloStudio --target android
+spid3r run studio.matrix build workspace/HelloStudio --target ios
+```
+
+---
+
+## 5. Next Steps
+
+- Learn the language & framework patterns in the [Spid3r v1.5.0 `.matrix` Tutorial](../tutorials/matrix-language-tutorial.md).
+- Master the daily dev loop & release workflow in the [Development Workflow Guide](development-workflow.md).
+- Check all manifest keys and CLI options in the [Configuration Reference](../references/configuration-reference.md).

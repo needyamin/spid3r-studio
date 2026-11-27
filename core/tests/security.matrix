@@ -290,13 +290,18 @@ fn main() -> int {
         "A-49 secret scanner passes clean source"
     );
 
-    // 12. A-36: Diagnostics ordering and BUG-09 guidance
+    // 12. Diagnostics Spid3r v1.5.0 & legacy guidance
     let bug09_sug = diag.suggestion_for_message("variable '_' is already declared in this scope");
-    check_ok(bug09_sug.contains("BUG-09"), "A-36 Diagnostics maps duplicate '_' to BUG-09");
+    check_ok(bug09_sug.contains("BUG-09"), "Diagnostics maps legacy duplicate '_' to BUG-09");
+    let priv_sug = diag.suggestion_for_message("method 'secret' is private");
+    check_ok(
+        priv_sug.contains("public"),
+        "Diagnostics maps private member access to 'public' fix"
+    );
     let unused_sug = diag.suggestion_for_message("unused variable 'foo'");
     check_ok(
         not unused_sug.contains("let _ = x;"),
-        "A-36 Diagnostics unused-variable advice does not recommend 'let _ = x;'"
+        "Diagnostics unused-variable advice does not recommend 'let _ = x;'"
     );
 
     // 13. A-42: Alternate IPv4 encodings (decimal/hex/octal/shorthand), IPv6-mapped hex, and host allow-list
@@ -359,23 +364,20 @@ fn main() -> int {
     http.clear_allowed_hosts();
     check_eq(http.allowed_hosts().len(), 0, "A-42 clear_allowed_hosts resets allow-list");
 
-    // 14. A-51: enum lint warning & diagnostics rule
-    let enum_src = "public enum Color {\n    Red,\n    Green,\n}\n";
+    // 14. Spid3r v1.5.0: enum + match passes bundle verification cleanly
+    let enum_bundle = "enum Color {\n    Red,\n    Green,\n}\nfn main() -> int {\n    let c = Color.Red;\n    let s = match (c) {\n        Color.Red => \"r\",\n        Color.Green => \"g\"\n    };\n    if s == \"r\" {\n        return 0;\n    }\n    return 1;\n}\n";
+    let enum_dir = "_test_sec_enum";
+    dir_remove(enum_dir);
     check_eq(
-        b_web.scan_unsupported_enums(enum_src).len(),
-        1,
-        "A-51 BuildWeb.scan_unsupported_enums flags top-level enum"
-    );
-    check_eq(
-        b_web.scan_unsupported_enums("// enum Commented { A }\nlet s = \"enum InStr\";\n").len(),
+        b_web.verify_flat_bundle(enum_bundle, enum_dir),
         0,
-        "A-51 scan_unsupported_enums ignores comments and strings"
+        "Spid3r v1.5.0 BuildWeb.verify_flat_bundle accepts valid enum + exhaustive match"
     );
-    let enum_warns = diag.lint_unsupported_enums(enum_src, "demo.matrix");
-    check_eq(enum_warns.len(), 1, "A-51 Diagnostics.lint_unsupported_enums emits warning");
-    check_ok(
-        diag.suggestion_for_message("unknown name from enum").contains("A-51"),
-        "A-51 Diagnostics provides enum guidance"
+    dir_remove(enum_dir);
+    check_eq(
+        diag.lint_unsupported_enums(enum_bundle, "demo.matrix").len(),
+        0,
+        "Spid3r v1.5.0 Diagnostics does not flag supported enum declarations"
     );
 
     // 15. A-14: Supply-chain SHA-256 verification and catalog digest lookup
@@ -383,6 +385,10 @@ fn main() -> int {
     check_eq(xtool_sha.len(), 64, "A-14 catalog.json pins 64-hex SHA-256 for xtool-ios x86_64");
     let cat_hash = ex.sha256_file("downloads/packages/catalog.json");
     check_eq(cat_hash.len(), 64, "A-14 Exec.sha256_file computes 64-hex digest");
+    check_ok(
+        ex.sri_sha256_attr("downloads/packages/catalog.json").starts_with(" integrity=\"sha256-"),
+        "A-31 Exec.sri_sha256_attr computes native SRI integrity attribute"
+    );
     check_ok(
         ex.verify_sha256("downloads/packages/catalog.json", cat_hash, "catalog.json"),
         "A-14 verify_sha256 passes on matching digest"

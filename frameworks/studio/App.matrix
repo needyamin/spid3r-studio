@@ -254,6 +254,17 @@ public class App {
     private let ready_fn;
     private let error_fn;
     private let deep_link_fn;
+    private let win_w;
+    private let win_h;
+    private let win_min_w;
+    private let win_min_h;
+    private let win_bg;
+    private let win_icon;
+    private let resize_fn;
+    private let focus_fn;
+    private let theme_changed_fn;
+    private let file_drop_fn;
+    private let before_close_fn;
     private let in_wasm;
     private let rendered_in_dispatch;
     private let client_ready;
@@ -273,6 +284,17 @@ public class App {
         self.ready_fn = null;
         self.error_fn = null;
         self.deep_link_fn = null;
+        self.win_w = 0;
+        self.win_h = 0;
+        self.win_min_w = 0;
+        self.win_min_h = 0;
+        self.win_bg = "";
+        self.win_icon = "";
+        self.resize_fn = null;
+        self.focus_fn = null;
+        self.theme_changed_fn = null;
+        self.file_drop_fn = null;
+        self.before_close_fn = null;
         self.in_wasm = false;
         self.rendered_in_dispatch = false;
         self.client_ready = false;
@@ -370,6 +392,68 @@ public class App {
     ///   fn studio_emit(n: string, p: string) { gui_emit(n, p); }
     public fn bridge(self, f_title, f_html, f_eval, f_on, f_emit) -> App {
         br.install(f_title, f_html, f_eval, f_on, f_emit);
+        return self;
+    }
+
+    /// Optional desktop window control shims (gui_size, gui_min_size, gui_theme, gui_bg_color, gui_icon, etc.).
+    public fn window_bridge(self, api: map) -> App {
+        br.install_window_api(api);
+        return self;
+    }
+
+    /// Configure initial desktop window dimensions in logical pixels.
+    public fn window_size(self, w: int, h: int) -> App {
+        self.win_w = w;
+        self.win_h = h;
+        return self;
+    }
+
+    /// Configure minimum desktop window dimensions in logical pixels.
+    public fn window_min_size(self, w: int, h: int) -> App {
+        self.win_min_w = w;
+        self.win_min_h = h;
+        return self;
+    }
+
+    /// Configure desktop webview startup background hex color (#RRGGBB / #RRGGBBAA).
+    public fn window_bg(self, hex: string) -> App {
+        self.win_bg = hex;
+        return self;
+    }
+
+    /// Configure desktop window & taskbar icon path (.ico or .png).
+    public fn window_icon(self, path: string) -> App {
+        self.win_icon = path;
+        return self;
+    }
+
+    /// Register desktop window resize callback: fn(ev: map) with {"width", "height"}.
+    public fn on_resize(self, f) -> App {
+        self.resize_fn = f;
+        return self;
+    }
+
+    /// Register desktop window focus callback: fn(ev: map) with {"focused"}.
+    public fn on_focus(self, f) -> App {
+        self.focus_fn = f;
+        return self;
+    }
+
+    /// Register OS/webview theme-change callback: fn(ev: map) with {"theme"}.
+    public fn on_theme_changed(self, f) -> App {
+        self.theme_changed_fn = f;
+        return self;
+    }
+
+    /// Register file-drop callback: fn(ev: map) with {"paths", "x", "y"}.
+    public fn on_file_drop(self, f) -> App {
+        self.file_drop_fn = f;
+        return self;
+    }
+
+    /// Register close-request callback: fn(ev: map); call Bridge.cancel_close() to veto.
+    public fn on_before_close(self, f) -> App {
+        self.before_close_fn = f;
         return self;
     }
 
@@ -523,6 +607,21 @@ public class App {
         if self.in_wasm {
             return;
         }
+        let tokens = theme.tokens();
+        let mode_s = if tokens.has("mode") {
+            string(tokens["mode"])
+        } else {
+            "light"
+        };
+        let bg_s = if tokens.has("bg") {
+            string(tokens["bg"])
+        } else {
+            ""
+        };
+        br.set_window_theme(mode_s);
+        if bg_s != "" {
+            br.set_window_bg_color(bg_s);
+        }
         let css_json = json_write(css.stylesheet());
         br.eval(
             "(function(){var css=" + css_json
@@ -580,22 +679,131 @@ public class App {
         }
     }
 
+    private fn dispatch_window_event(self, kind: string, cb, raw_a, raw_b) {
+        if cb == null {
+            return;
+        }
+        let raw_payload = if raw_b != null {
+            raw_b
+        } else {
+            raw_a
+        };
+        let ev_map = {
+            "event": kind,
+            "raw": raw_payload,
+        };
+        if type_of(raw_payload) == "string" {
+            let trimmed = string(raw_payload).trim();
+            if trimmed.starts_with("{") or trimmed.starts_with("[") {
+                try {
+                    let parsed = json_parse(trimmed);
+                    if type_of(parsed) == "map" {
+                        for (pk, pv) in parsed {
+                            ev_map[string(pk)] = pv;
+                        }
+                    }
+                } catch (_pe) {
+                    let _skip_pe = _pe;
+                }
+            }
+        } elif type_of(raw_payload) == "map" {
+            for (pk, pv) in raw_payload {
+                ev_map[string(pk)] = pv;
+            }
+        }
+        try {
+            cb(ev_map);
+        } catch (e) {
+            self.notify_error("window:" + kind, string(e), "E_WINDOW_EVENT", false);
+        }
+        if dirty_render {
+            try {
+                self.render();
+            } catch (e2) {
+                self.notify_error("window_render:" + kind, string(e2), "E_RENDER", true);
+                br.set_html(build_error_html("Render error", string(e2)));
+            }
+        }
+    }
+
     /// Boot the app in the native webview and run until the window closes.
     public fn run(self) -> int {
         self.prepare();
         br.set_title(self.app_name);
+        if int(self.win_w) > 0 and int(self.win_h) > 0 {
+            br.set_window_size(int(self.win_w), int(self.win_h));
+        }
+        if int(self.win_min_w) > 0 and int(self.win_min_h) > 0 {
+            br.set_window_min_size(int(self.win_min_w), int(self.win_min_h));
+        }
+        if string(self.win_icon) != "" {
+            br.set_window_icon(string(self.win_icon));
+        }
+        if self.boot_fn != null {
+            let bf = self.boot_fn;
+            bf();
+        }
+        self.restore_hot_snapshot();
+        let boot_tokens = theme.tokens();
+        let boot_mode = if boot_tokens.has("mode") {
+            string(boot_tokens["mode"])
+        } else {
+            "light"
+        };
+        let boot_bg = if string(self.win_bg) != "" {
+            string(self.win_bg)
+        } elif boot_tokens.has("bg") {
+            string(boot_tokens["bg"])
+        } else {
+            ""
+        };
+        br.set_window_theme(boot_mode);
+        if boot_bg != "" {
+            br.set_window_bg_color(boot_bg);
+        }
         br.eval(
             "(function(){var s=document.createElement('style');s.setAttribute('data-studio','1');s.textContent="
             + json_write(css.stylesheet()) + ";document.head.appendChild(s);})();"
         );
         br.eval(client.runtime_js());
         self.client_ready = true;
-        if self.boot_fn != null {
-            let bf = self.boot_fn;
-            bf();
-        }
-        self.restore_hot_snapshot();
         self.render();
+
+        if self.resize_fn != null {
+            let rfn = self.resize_fn;
+            br.on(
+                "resize",
+                (a, b = null) => self.dispatch_window_event("resize", rfn, a, b)
+            );
+        }
+        if self.focus_fn != null {
+            let ffn = self.focus_fn;
+            br.on(
+                "focus",
+                (a, b = null) => self.dispatch_window_event("focus", ffn, a, b)
+            );
+        }
+        if self.theme_changed_fn != null {
+            let tfn = self.theme_changed_fn;
+            br.on(
+                "theme_changed",
+                (a, b = null) => self.dispatch_window_event("theme_changed", tfn, a, b)
+            );
+        }
+        if self.file_drop_fn != null {
+            let dfn = self.file_drop_fn;
+            br.on(
+                "file_drop",
+                (a, b = null) => self.dispatch_window_event("file_drop", dfn, a, b)
+            );
+        }
+        if self.before_close_fn != null {
+            let cfn = self.before_close_fn;
+            br.on(
+                "before_close",
+                (a, b = null) => self.dispatch_window_event("before_close", cfn, a, b)
+            );
+        }
 
         br.on("ui", (a, b = null) => {
             let ev = if b != null {

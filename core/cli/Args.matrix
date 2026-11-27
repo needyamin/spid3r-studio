@@ -2,7 +2,7 @@
 // CLI help text and flag parsing helpers.
 
 public fn usage() {
-    println("AppStudio CLI — spid3r apps for Desktop, Web, iOS & Android");
+    println("AppStudio CLI — Spid3r v1.5.0 apps (.matrix/.mt) for Desktop, Web, iOS & Android");
     println("");
     println("Usage: spid3r run studio.matrix <command> [args]");
     println("");
@@ -11,9 +11,11 @@ public fn usage() {
         "  new <AppName> [outdir]            Scaffold a self-contained app (vendors the framework)"
     );
     println("  gui [appdir]                      Launch AppStudio GUI Control Center window");
-    println("  run <appdir>                      Run the app in a webview window");
     println(
-        "  dev <appdir> [--target T]       Hot-reload preview (--target web [--host IP] [--port N] | ios)"
+        "  run <appdir> [--engine E] [--devtools]  Run the app in a desktop webview (E = tree|vm)"
+    );
+    println(
+        "  dev <appdir> [--target T]         Hot-reload preview (--target web [--host IP] [--port N] | ios)"
     );
     println("  check <appdir>                    Static-check the app entry");
     println(
@@ -23,11 +25,11 @@ public fn usage() {
         "  ios <subcommand>                  Manage xtool & deploy iOS (install-tools|status|setup|devices|run)"
     );
     println(
-        "  test [filter]                     Run fmt --check, strict checks, and test suites"
+        "  test [filter] [--all]             Run fmt --check, strict checks, and test suites"
     );
     println("  clean [appdir] [--cache]          Remove build artifacts (and optional cache)");
     println("  upgrade <appdir>                  Refresh vendored vendor/studio/ runtime modules");
-    println("  doctor                            Check the toolchain");
+    println("  doctor                            Check Spid3r, WASM, iOS & Android toolchains");
     println("  help                              This message");
 }
 

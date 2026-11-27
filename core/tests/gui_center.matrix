@@ -48,10 +48,18 @@ fn main() -> int {
     );
     check(
         file_exists("documents/guides/getting-started.md") and file_exists(
+            "documents/guides/development-workflow.md"
+        ) and file_exists(
             "documents/tutorials/matrix-language-tutorial.md"
         ),
         "documents/ guides and tutorials exist"
     );
+    for doc_entry in model.documentation_catalog() {
+        check(
+            file_exists(string(doc_entry["path"])),
+            "documentation_catalog path exists: " + string(doc_entry["path"])
+        );
+    }
 
     let tiers = model.architecture_tiers();
     check(tiers.len() == 5, "StudioModel.architecture_tiers returns all 5 A-Z tiers");
@@ -125,7 +133,7 @@ fn main() -> int {
     // 6. Toolchain readiness & recommendation engine
     let partial_checks = [
     {
-        "id": "spid3r", "name": "Spid3r CLI", "category": "Core", "status": "ok", "detail": "1.1.1", "required_for": "All", "recommendation": "", "action_kind": "none", "action_label": "", "action_arg": "", "cmd_hint": ""
+        "id": "spid3r", "name": "Spid3r CLI", "category": "Core", "status": "ok", "detail": "1.5.0", "required_for": "All", "recommendation": "", "action_kind": "none", "action_label": "", "action_arg": "", "cmd_hint": ""
     }
     ,
     {

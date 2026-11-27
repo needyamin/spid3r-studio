@@ -1,9 +1,9 @@
-// examples/demo/app.matrix
+// workspace/demo/app.matrix
 // AppStudio showcase app — multi-file pages, forms, dialogs, storage, theme, and host effects.
 //
-// Run natively:  spid3r run studio.matrix run examples/demo
-// Hot reload:    spid3r run studio.matrix dev examples/demo --target web
-// Build:         spid3r run studio.matrix build examples/demo --target web|android|ios|desktop
+// Run natively:  spid3r run studio.matrix run workspace/demo
+// Hot reload:    spid3r run studio.matrix dev workspace/demo --target web
+// Build:         spid3r run studio.matrix build workspace/demo --target web|android|ios|desktop
 
 import "studio/App" as appkit;
 import "studio/State" as state;

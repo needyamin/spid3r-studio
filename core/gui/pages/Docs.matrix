@@ -82,7 +82,7 @@ public fn Docs() -> map {
     ui.row([ui.card([ui.row(
         [ui.title("Logs, QA Reports & Spid3r Bug Tracker"),
         ui.flex_spacer(),
-        ui.badge("BUG-01..BUG-09 Verified", "primary"),
+        ui.badge("Spid3r v" + model.SPID3R_TARGET_VER + " Verified", "primary"),
         ]
     ), ui.caption(
         "Export console logs and compiler diagnostic reports to documents/logs/ and documents/reports/, or inspect bugs.html."

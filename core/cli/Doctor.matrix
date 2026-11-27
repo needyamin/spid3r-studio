@@ -2,19 +2,49 @@
 // Toolchain diagnostics for spid3r, iOS (xtool/swift), and Android (java/gradle/adb/SDK).
 
 import "Exec" as ex;
+import "Fs" as fs;
 import "IosToolchain" as ios_tc;
+import "core/Version" as ver_info;
 
 public fn cmd_doctor() -> int {
-    println("AppStudio doctor");
+    println("AppStudio doctor (v" + ver_info.STUDIO_VERSION + ")");
     println("----------------");
     let ok_all = true;
 
     let v = ex.probe_spid3r_version();
     if v == "" {
-        println("[x] spid3r        NOT FOUND on PATH");
+        println(
+            "[x] spid3r        NOT FOUND on PATH (requires v" + ver_info.SPID3R_MIN_VERSION + "+)"
+        );
         ok_all = false;
     } else {
-        println("[ok] spid3r       " + v);
+        println("[ok] spid3r       " + v + " (target v" + ver_info.SPID3R_TARGET_VERSION + ")");
+    }
+
+    let spkg = ex.probe_version("spkg", ["--version"]);
+    if spkg == "" {
+        println("[!] spkg          not found on PATH (optional package manager)");
+    } else {
+        println("[ok] spkg         " + spkg);
+    }
+
+    let yamc = ex.probe_version("yamc", ["--version"]);
+    if yamc == "" {
+        println("[!] yamc          not found on PATH (optional standalone AOT compiler)");
+    } else {
+        println("[ok] yamc         " + yamc);
+    }
+
+    let wasm_ver = if v != "" {
+        v
+    } else {
+        ver_info.SPID3R_TARGET_VERSION
+    };
+    let wasm_dir = fs.join_dir(fs.downloads_dir(), "wasm-runtime/" + wasm_ver);
+    if file_exists(wasm_dir + "/spid3r.wasm") and file_exists(wasm_dir + "/spid3r.js") {
+        println("[ok] wasm cache   " + wasm_dir);
+    } else {
+        println("[!] wasm cache    not cached yet (auto-extracted on first web/mobile build)");
     }
 
     let x = ios_tc.probe_xtool_status();

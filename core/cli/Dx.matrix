@@ -5,7 +5,11 @@ import "Fs" as fs;
 import "Exec" as ex;
 import "Args" as args_cli;
 
-fn collect_matrix_files(dir: string, out: list) {
+fn is_source_ext(name: string) -> bool {
+    return name.ends_with(".matrix") or name.ends_with(".mt");
+}
+
+fn collect_matrix_files(dir: string, out: list, include_all_ws: bool = false) {
     let ld = list_dir(dir);
     if ld.is_err() {
         return;
@@ -17,8 +21,11 @@ fn collect_matrix_files(dir: string, out: list) {
             if name == "downloads" or name == "documents" or name == "build" or name == "dist" or name == ".git" or name == "storage" or name == "vendor" or name.starts_with("_test_") {
                 continue;
             }
-            collect_matrix_files(p, out);
-        } elif is_file(p) and name.ends_with(".matrix") and not name.starts_with("._tmp_") {
+            if not include_all_ws and fs.base_name(dir) == "workspace" and name != "demo" {
+                continue;
+            }
+            collect_matrix_files(p, out, include_all_ws);
+        } elif is_file(p) and is_source_ext(name) and not name.starts_with("._tmp_") {
             out.push(p);
         }
     }
@@ -32,7 +39,7 @@ fn first_positional(args: list) -> string {
             skip_next = false;
             continue;
         }
-        if s == "--target" or s == "-o" or s == "--port" or s == "--host" {
+        if s == "--target" or s == "-o" or s == "--port" or s == "--host" or s == "--engine" {
             skip_next = true;
             continue;
         }
@@ -89,8 +96,9 @@ fn check_files(files: list) -> bool {
 public fn cmd_test(rest: list) -> int {
     let root = fs.trim_slash(fs.fw_root());
     let filter = first_positional(rest);
+    let include_all_ws = args_cli.has_flag(rest, "--all");
     let all_files = [];
-    collect_matrix_files(root, all_files);
+    collect_matrix_files(root, all_files, include_all_ws);
     all_files.sort();
     if all_files.len() == 0 {
         println("error: no .matrix files found under " + root);

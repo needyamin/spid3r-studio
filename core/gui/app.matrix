@@ -142,6 +142,9 @@ fn page_docs() -> map {
 public fn studio_app() {
     return appkit.App("Spid3r Studio Control Panel", "sh.spid3r.studio", model.STUDIO_VERSION)
     .data_dir("core/gui/storage")
+    .window_size(1280, 820)
+    .window_min_size(920, 620)
+    .window_bg("#0b0f1a")
     .page("Workspace", page_ws)
     .page("Editor", page_ed)
     .page("Platforms", page_plat)

@@ -1,0 +1,8 @@
+// core/Version.matrix
+// Single source of truth for AppStudio and Spid3r target version metadata.
+
+public const STUDIO_VERSION = "1.5.0";
+public const SPID3R_TARGET_VERSION = "1.5.0";
+public const SPID3R_MIN_VERSION = "1.5.0";
+public const SPID3R_REPO_URL = "https://github.com/needyamin/spid3r";
+public const SPID3R_RELEASES_URL = "https://github.com/needyamin/spid3r/releases";

@@ -208,10 +208,10 @@ public fn scan_environment() -> list {
                 "missing",
                 "Not on PATH",
                 "All targets",
-                "Install Spid3r v1.1.1+ and add it to PATH.",
+                "Install Spid3r v1.5.0+ and add it to PATH.",
                 "open_url",
                 "Download Spid3r",
-                "https://github.com/spid3r-lang/spid3r",
+                "https://github.com/needyamin/spid3r",
                 "spid3r version"
             )
         );

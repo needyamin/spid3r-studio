@@ -2,6 +2,7 @@
 // Shared studio.json reader, validation, and expanded app metadata accessors.
 
 import "Fs" as fs;
+import "core/Version" as ver_info;
 
 public fn read_manifest(appdir: string) -> map {
     let r = read_file(fs.join_dir(appdir, "studio.json"));
@@ -500,15 +501,15 @@ public fn emit_sbom(
     {
         "type": "framework",
         "name": "appstudio-framework",
-        "version": "1.1.1",
-        "purl": "pkg:generic/appstudio-framework@1.1.1",
+        "version": ver_info.STUDIO_VERSION,
+        "purl": "pkg:generic/appstudio-framework@" + ver_info.STUDIO_VERSION,
     }
     ,
     {
         "type": "application",
         "name": "spid3r-runtime",
-        "version": "1.1.1",
-        "purl": "pkg:generic/spid3r@1.1.1",
+        "version": ver_info.SPID3R_TARGET_VERSION,
+        "purl": "pkg:generic/spid3r@" + ver_info.SPID3R_TARGET_VERSION,
     }
     ,
     ];
@@ -548,7 +549,7 @@ public fn emit_sbom(
             components.push({
                 "type": "file",
                 "name": "frameworks/studio/" + string(fm),
-                "version": "1.1.1",
+                "version": ver_info.STUDIO_VERSION,
             });
         }
     }

@@ -102,14 +102,7 @@ public class MemoryStore implements Store {
 
     public fn remove(self, k: string) {
         if self.data.has(k) {
-            let next = {
-            };
-            for (ck, cv) in self.data {
-                if string(ck) != k {
-                    next[ck] = cv;
-                }
-            }
-            self.data = next;
+            let _removed = self.data.remove(k);
             self.ver += 1;
             self.dirty = true;
         }
@@ -318,20 +311,10 @@ public class FileStore implements Store {
         if file_exists(self.kv_path()) {
             let _bk = copy_file(self.kv_path(), self.bak_path());
         }
-        let tmp = self.kv_path() + ".tmp";
-        let wr = write_file(tmp, payload);
+        let wr = write_file_atomic(self.kv_path(), payload);
         if wr.is_err() {
             self.last_error = string(wr.unwrap_err());
             return false;
-        }
-        let rn = rename(tmp, self.kv_path());
-        if rn.is_err() {
-            let wr2 = write_file(self.kv_path(), payload);
-            let _rm = remove_file(tmp);
-            if wr2.is_err() {
-                self.last_error = string(wr2.unwrap_err());
-                return false;
-            }
         }
         self.saves = int(self.saves) + 1;
         self.dirty = false;
@@ -357,14 +340,7 @@ public class FileStore implements Store {
 
     public fn remove(self, k: string) {
         if self.data.has(k) {
-            let next = {
-            };
-            for (ck, cv) in self.data {
-                if string(ck) != k {
-                    next[ck] = cv;
-                }
-            }
-            self.data = next;
+            let _removed = self.data.remove(k);
             self.ver += 1;
             self.dirty = true;
         }
@@ -409,14 +385,7 @@ public class Container {
             "factory": factory, "scope": scope
         };
         if self.singletons.has(name) {
-            let next = {
-            };
-            for (k, v) in self.singletons {
-                if string(k) != name {
-                    next[k] = v;
-                }
-            }
-            self.singletons = next;
+            let _removed = self.singletons.remove(name);
         }
         return self;
     }
